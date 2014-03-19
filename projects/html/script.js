@@ -32,8 +32,6 @@ function krx_init() {
   pc_sender = new mozRTCPeerConnection();
   pc_sender.onicecandidate = function(evt) {
     console.log("onicecandidate");
-    console.log(evt);
-    console.log(evt.candidate);
   };
   
   // receiver peer connection
