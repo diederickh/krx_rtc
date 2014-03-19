@@ -7,14 +7,22 @@ body {
     background-color:smoke;
 }
 
+#rtc_container {
+    width:750px;
+    position:absolute;
+    left:50%;
+    margin-left:-375px;
+}
+
+#output_container,
 #input_container {
     position:absolute;
-    top:100px;
-    left:50%;
-    margin-left:-180px;
+    top:10px;
+    left:0;
     text-align:center;
 }
 
+#video_output_container,
 #video_input_container {
     border:1px solid black;
     position:relative;
@@ -23,6 +31,7 @@ body {
     background-color:whitesmoke;
 }
 
+#video_output_container input[type=button],
 #video_input_container input[type=button] {
     position:absolute;
     width:100px;
@@ -31,10 +40,23 @@ body {
     margin-left:-50px;
 }
 
+#video_output_sdp,
 #video_input_sdp {
     font-family:Courier, mono-space;
     font-size:11px;
     width:320px;
     height:200px;
     margin-top:10px;
+}
+
+#start_streaming {
+    position:absolute;
+    left:350px;
+    top:440px;
+}
+
+#output_container {
+    position:absolute;
+    left:auto;
+    right:0;
 }

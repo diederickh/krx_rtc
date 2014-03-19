@@ -9,14 +9,27 @@
 </head>
 <body>
 
-  <div id="input_container">
-    <h1>Video Input</h1>
-    <div id="video_input_container">
-      <input type="button" id="init_gum" value="Start">
-      <video id="input_video" width="320" height="240"></video>
+  <div id="rtc_container">
+    <div id="input_container">
+      <h1>Video Input</h1>
+      <div id="video_input_container">
+        <input type="button" id="init_gum_input" value="Start">
+        <video id="input_video" width="320" height="240"></video>
+      </div>
+      <div id="video_input_info">
+        <textarea id="video_input_sdp"></textarea>
+      </div>
     </div>
-    <div id="video_input_info">
-      <textarea id="video_input_sdp"></textarea>
+    <input type="button" id="start_streaming" value=">>>">
+    <div id="output_container">
+      <h1>Video Output</h1>
+      <div id="video_output_container">
+        <!-- <input type="button" id="init_gum_output" value="Start"> -->
+        <video id="output_video" width="320" height="240"></video>
+      </div>
+      <div id="video_output_info">
+        <textarea id="video_output_sdp"></textarea>
+      </div>
     </div>
   </div>
 </body>
