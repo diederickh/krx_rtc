@@ -1,0 +1,40 @@
+* { 
+    font-family: Arial, sans-serif;
+    font-size: 15px;
+}
+
+body {
+    background-color:smoke;
+}
+
+#input_container {
+    position:absolute;
+    top:100px;
+    left:50%;
+    margin-left:-180px;
+    text-align:center;
+}
+
+#video_input_container {
+    border:1px solid black;
+    position:relative;
+    width:320px;
+    height:285px;
+    background-color:whitesmoke;
+}
+
+#video_input_container input[type=button] {
+    position:absolute;
+    width:100px;
+    bottom:10px;
+    left:50%;
+    margin-left:-50px;
+}
+
+#video_input_sdp {
+    font-family:Courier, mono-space;
+    font-size:11px;
+    width:320px;
+    height:200px;
+    margin-top:10px;
+}
