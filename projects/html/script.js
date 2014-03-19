@@ -11,14 +11,14 @@ navigator.getUserMedia = navigator.getUserMedia
                          || navigator.webkitGetUserMedia
                          || navigator.mozGetUserMedia;
 
+window.RTCPeerConnection = window.mozRTCPeerConnection || window.webkitRTCPeerConnection;
+
 var vid_input = null;
 var vid_output = null;
 var pc_sender = null;
 var pc_receiver = null;
 var sdp_input = null; /* the sdp input texturea */
 var sdp_output = null; /* the sdp output textarea */
-var sender_sdp;
-var receiver_sdp;
 
 function krx_init() {
   
@@ -26,16 +26,22 @@ function krx_init() {
   vid_output = $('#output_video')[0];
   sdp_input = $('#video_input_sdp');
   sdp_output = $('#video_output_sdp');
-  
+
+  // ice servers
+  var servers = {
+    iceServers: [
+        {url: "stun:stun.l.google.com:19302"},
+    ]
+  }
 
   // peer connections. sender initiates the connection, 
-  pc_sender = new mozRTCPeerConnection();
+  pc_sender = new window.RTCPeerConnection(servers);
   pc_sender.onicecandidate = function(evt) {
     console.log("onicecandidate");
   };
   
   // receiver peer connection
-  pc_receiver = new mozRTCPeerConnection();
+  pc_receiver = new window.RTCPeerConnection(servers);
   pc_receiver.onaddstream = function(e) {
     vid_output.mozSrcObject = e.stream;
     vid_output.play();
@@ -52,18 +58,16 @@ function krx_init() {
     // load the SDP 
     pc_sender.createOffer(
       function(desc) {
-        sender_sdp = desc;
         sdp_input.text(desc.sdp);
       },
       function(err) {
         console.log(err.message);
       }
    );
-
   };
 
   var krx_gum_error = function(err) {
-    console.log(err.message);
+    console.log(err);
   };
 
   // kickoff
