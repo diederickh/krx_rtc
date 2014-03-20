@@ -12,6 +12,7 @@ navigator.getUserMedia = navigator.getUserMedia
                          || navigator.mozGetUserMedia;
 
 window.RTCPeerConnection = window.mozRTCPeerConnection || window.webkitRTCPeerConnection;
+window.RTCSessionDescription = window.mozRTCSessionDescription || window.RTCSessionDescription;
 
 var vid_input = null;
 var vid_output = null;
@@ -43,16 +44,32 @@ function krx_init() {
   // receiver peer connection
   pc_receiver = new window.RTCPeerConnection(servers);
   pc_receiver.onaddstream = function(e) {
-    vid_output.mozSrcObject = e.stream;
+
+    if(navigator.mozGetUserMedia) { 
+      vid_output.mozSrcObject = e.stream;
+    }
+
+    if(window.webkitURL) {
+      vid_output.src = webkitURL.createObjectURL(e.stream);
+    }
+
     vid_output.play();
   }
 
   // user media callbacks
   var krx_gum_success = function(stream) {
 
-    vid_input.mozSrcObject = stream;
+   
+    if(navigator.mozGetUserMedia) {
+      vid_input.mozSrcObject = stream;
+    }
+
+    if(window.webkitURL) {
+      vid_input.src = webkitURL.createObjectURL(stream);
+    }
+
     vid_input.play();
-  
+
     pc_sender.addStream(stream);
 
     // load the SDP 
@@ -86,7 +103,7 @@ function krx_init() {
     sdp_output.text(input_sdp_val);
 
     // set the offer SDPs
-    var isdp = new mozRTCSessionDescription({type:"offer", sdp:input_sdp_val});
+    var isdp = new window.RTCSessionDescription({type:"offer", sdp:input_sdp_val});
     pc_receiver.setRemoteDescription(isdp);
     pc_sender.setLocalDescription(isdp);
 
