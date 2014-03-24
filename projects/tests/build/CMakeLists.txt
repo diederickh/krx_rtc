@@ -11,7 +11,7 @@ include_directories(
   ${install_dir}/include/
 )
 
-add_executable(udp_server ${bd}/../src/udp_server.cpp)
+add_executable(udp_server ${bd}/../src/udp_server.c)
 add_executable(udp_client ${bd}/../src/udp_client.cpp)
 
 set(libraries

@@ -6,10 +6,7 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
-
-extern "C" {
-#  include <stun5389.h>
-}
+#include <stun5389.h>
 
 #define KRX_UDP_BUF_LEN 512
 
@@ -121,10 +118,10 @@ static int handle_stun(uint8_t *packet, size_t len) {
   print_stun_validation_status(status);
 
   ret = stun_agent_init_response(&agent, &response, output, 1024, &request);
-  printf("Stun agent_init_response ret: %d", ret);
+  printf("Stun agent_init_response ret: %d\n", ret);
 
   output_size = stun_agent_finish_message(&agent, &response, NULL, 0);
-  printf("Stun response size: %d", (int)output_size);
+  printf("Stun response size: %d\n", (int)output_size);
 
   print_buffer(output, output_size);
 
