@@ -201,10 +201,9 @@ int handle_stun(udp_conn* c, uint8_t *packet, size_t len) {
   printf("Magic cookie: %02X %02X %02X %02X\n", p[0], p[1], p[2], p[3]);
   inet_ntop(AF_INET, &c->client.sin_addr.s_addr, client_ip, sizeof(client_ip));
   printf("Received data from: %s\n", client_ip);
-  StunMessageReturn append_ret = stun_message_append_xor_addr_full(&response, STUN_ATTRIBUTE_XOR_MAPPED_ADDRESS, 
-                                                                   (const struct sockaddr*)&c->client, sock_len,
-                                                                   magic_cookie);
-  print_stun_message_return(append_ret);
+  StunMessageReturn append_ret = stun_message_append_xor_addr(&response, STUN_ATTRIBUTE_XOR_MAPPED_ADDRESS, 
+                                                              (const struct sockaddr*)&c->client, sock_len);
+ print_stun_message_return(append_ret);
   // --------
 
   output_size = stun_agent_finish_message(&agent, &response, NULL, 0);
