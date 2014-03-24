@@ -102,6 +102,7 @@ static void print_buffer(uint8_t *buf, size_t len) {
 }
 
 static int handle_stun(uint8_t *packet, size_t len) {
+
   StunAgent agent;
   StunValidationStatus status;
   StunMessage request;
@@ -124,7 +125,6 @@ static int handle_stun(uint8_t *packet, size_t len) {
     STUN_ATTRIBUTE_REFLECTED_FROM,
     STUN_ATTRIBUTE_CHANNEL_NUMBER,
     STUN_ATTRIBUTE_LIFETIME,
-
     STUN_ATTRIBUTE_MS_ALTERNATE_SERVER,
     STUN_ATTRIBUTE_MAGIC_COOKIE,
     STUN_ATTRIBUTE_BANDWIDTH,
@@ -144,7 +144,6 @@ static int handle_stun(uint8_t *packet, size_t len) {
     STUN_ATTRIBUTE_EVEN_PORT,
     STUN_ATTRIBUTE_REQUESTED_TRANSPORT,
     STUN_ATTRIBUTE_DONT_FRAGMENT,
-
     STUN_ATTRIBUTE_XOR_MAPPED_ADDRESS,
     STUN_ATTRIBUTE_TIMER_VAL,
     STUN_ATTRIBUTE_REQUESTED_IP,
@@ -152,18 +151,14 @@ static int handle_stun(uint8_t *packet, size_t len) {
     STUN_ATTRIBUTE_CONNECT_STAT,
     STUN_ATTRIBUTE_PRIORITY,
     STUN_ATTRIBUTE_USE_CANDIDATE,
-
     STUN_ATTRIBUTE_OPTIONS,
     STUN_ATTRIBUTE_MS_VERSION,
     STUN_ATTRIBUTE_SOFTWARE,
     STUN_ATTRIBUTE_ALTERNATE_SERVER,
-
     STUN_ATTRIBUTE_FINGERPRINT,
     STUN_ATTRIBUTE_ICE_CONTROLLED,
     STUN_ATTRIBUTE_ICE_CONTROLLING,
-
     STUN_ATTRIBUTE_MS_SEQUENCE_NUMBER,
-
     STUN_ATTRIBUTE_CANDIDATE_IDENTIFIER
   };
 
@@ -185,7 +180,6 @@ static int handle_stun(uint8_t *packet, size_t len) {
   return 0;
 }
 
-
 int krx_udp_receive(udp_conn* c) {
 
   struct sockaddr_in client;
@@ -206,15 +200,15 @@ int krx_udp_receive(udp_conn* c) {
 
 void print_stun_validation_status(StunValidationStatus s) {
   switch(s) {
-    case STUN_VALIDATION_SUCCESS: printf("StunValidationStatus: STUN_VALIDATION_SUCCESS\n"); break;
-    case STUN_VALIDATION_NOT_STUN: printf("StunValidationStatus: STUN_VALIDATION_NOT_STUN\n"); break;
-    case STUN_VALIDATION_INCOMPLETE_STUN: printf("StunValidationStatus: STUN_VALIDATION_INCOMPLETE_STUN\n"); break;
-    case STUN_VALIDATION_BAD_REQUEST: printf("StunValidationStatus: STUN_VALIDATION_BAD_REQUEST\n"); break;
-    case STUN_VALIDATION_UNAUTHORIZED_BAD_REQUEST: printf("StunValidationStatus: STUN_VALIDATION_UNAUTHORIZED_BAD_REQUEST\n"); break;
-    case STUN_VALIDATION_UNAUTHORIZED: printf("StunValidationStatus: STUN_VALIDATION_UNAUTHORIZED\n"); break;
-    case STUN_VALIDATION_UNMATCHED_RESPONSE: printf("StunValidationStatus: STUN_VALIDATION_UNMATCHED_RESPONSE\n"); break;
-    case STUN_VALIDATION_UNKNOWN_REQUEST_ATTRIBUTE: printf("StunValidationStatus: STUN_VALIDATION_UNKNOWN_REQUEST_ATTRIBUTE\n"); break;
-    case STUN_VALIDATION_UNKNOWN_ATTRIBUTE: printf("StunValidationStatus: STUN_VALIDATION_UNKNOWN_ATTRIBUTE\n"); break;
-    default:printf("StunValidationStatus: unknown status.\n"); break;
+    case STUN_VALIDATION_SUCCESS:                   printf("StunValidationStatus: STUN_VALIDATION_SUCCESS\n");                    break;
+    case STUN_VALIDATION_NOT_STUN:                  printf("StunValidationStatus: STUN_VALIDATION_NOT_STUN\n");                   break;
+    case STUN_VALIDATION_INCOMPLETE_STUN:           printf("StunValidationStatus: STUN_VALIDATION_INCOMPLETE_STUN\n");            break;
+    case STUN_VALIDATION_BAD_REQUEST:               printf("StunValidationStatus: STUN_VALIDATION_BAD_REQUEST\n");                break;
+    case STUN_VALIDATION_UNAUTHORIZED_BAD_REQUEST:  printf("StunValidationStatus: STUN_VALIDATION_UNAUTHORIZED_BAD_REQUEST\n");   break;
+    case STUN_VALIDATION_UNAUTHORIZED:              printf("StunValidationStatus: STUN_VALIDATION_UNAUTHORIZED\n");               break;
+    case STUN_VALIDATION_UNMATCHED_RESPONSE:        printf("StunValidationStatus: STUN_VALIDATION_UNMATCHED_RESPONSE\n");         break;
+    case STUN_VALIDATION_UNKNOWN_REQUEST_ATTRIBUTE: printf("StunValidationStatus: STUN_VALIDATION_UNKNOWN_REQUEST_ATTRIBUTE\n");  break;
+    case STUN_VALIDATION_UNKNOWN_ATTRIBUTE:         printf("StunValidationStatus: STUN_VALIDATION_UNKNOWN_ATTRIBUTE\n");          break;
+    default:                                        printf("StunValidationStatus: unknown status.\n");                            break;
   }
 }
