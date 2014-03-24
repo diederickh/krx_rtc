@@ -10,7 +10,7 @@
 
 #define KRX_UDP_BUF_LEN 512
 
-struct udp_conn {
+typedef struct {
   /* networking */
   int sock;
   int port;
@@ -21,7 +21,7 @@ struct udp_conn {
   StunAgent agent;
   StunMessage request;
   StunMessage response;
-};
+} udp_conn;
 
 bool must_run = true;
 void krx_udp_sighandler(int num);
@@ -40,11 +40,11 @@ int main() {
   con.port = 2233;
 
   if(krx_udp_init(&con) < 0) {
-    ::exit(EXIT_FAILURE);
+    exit(EXIT_FAILURE);
   }
 
   if(krx_udp_bind(&con) < 0) {
-    ::exit(EXIT_FAILURE);
+    exit(EXIT_FAILURE);
   }
 
   signal(SIGINT, krx_udp_sighandler);
@@ -60,7 +60,7 @@ int main() {
 void krx_udp_sighandler(int signum) {
   printf("Verbose: handled sig.\n");
   must_run = false;
-  ::exit(EXIT_FAILURE);
+  exit(EXIT_FAILURE);
 }
 
 int krx_udp_init(udp_conn* c) {
@@ -92,7 +92,7 @@ int krx_udp_bind(udp_conn* c) {
 
 static void print_buffer(uint8_t *buf, size_t len) {
   int i;
-  for(int i = 0; i < len; ++i) {
+  for(i = 0; i < len; ++i) {
     printf("%02X ", (unsigned char)buf[i]);
     if(i > 0 && i % 40 == 0) {
       printf("\n");
