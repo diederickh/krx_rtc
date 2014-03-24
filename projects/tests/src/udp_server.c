@@ -34,6 +34,7 @@ void print_buffer(uint8_t *buf, size_t len);
 void print_stun_validation_status(StunValidationStatus s);
 void print_stun_class(StunClass c);
 void print_stun_method(StunMethod m);
+void print_stun_message_return(StunMessageReturn r);
 int handle_stun(udp_conn* c, uint8_t *packet, size_t len); 
 
 int main() {
@@ -196,11 +197,14 @@ int handle_stun(udp_conn* c, uint8_t *packet, size_t len) {
   magic_cookie = *((uint32_t*)transid);
   socklen_t sock_len = sizeof(c->client);
   char client_ip[16] = { 0 } ;
+  uint8_t* p = (uint8_t*) &magic_cookie;
+  printf("Magic cookie: %02X %02X %02X %02X\n", p[0], p[1], p[2], p[3]);
   inet_ntop(AF_INET, &c->client.sin_addr.s_addr, client_ip, sizeof(client_ip));
   printf("Received data from: %s\n", client_ip);
   StunMessageReturn append_ret = stun_message_append_xor_addr_full(&response, STUN_ATTRIBUTE_XOR_MAPPED_ADDRESS, 
                                                                    (const struct sockaddr*)&c->client, sock_len,
                                                                    magic_cookie);
+  print_stun_message_return(append_ret);
   // --------
 
   output_size = stun_agent_finish_message(&agent, &response, NULL, 0);
@@ -277,5 +281,17 @@ void print_stun_method(StunMethod m) {
     case STUN_CREATEPERMISSION:   printf("StunMethod: STUN_CREATEPERMISSION or STUN_IND_CONNECT_STATUS.\n");   break;
     case STUN_CHANNELBIND:        printf("StunMethod: STUN_CHANNELBIND.\n");                                   break;
     default:                      printf("StunMethod: unkown.\n");                                             break;
+  }
+}
+
+void print_stun_message_return(StunMessageReturn r) {
+
+  switch(r) {
+    case STUN_MESSAGE_RETURN_SUCCESS: printf("StunMessageReturn: STUN_MESSAGE_RETURN_SUCCESS.\n"); break;
+    case STUN_MESSAGE_RETURN_NOT_FOUND: printf("StunMessageReturn:   STUN_MESSAGE_RETURN_NOT_FOUND.\n"); break;
+    case STUN_MESSAGE_RETURN_INVALID: printf("StunMessageReturn:   STUN_MESSAGE_RETURN_INVALID.\n"); break;
+    case STUN_MESSAGE_RETURN_NOT_ENOUGH_SPACE: printf("StunMessageReturn:   STUN_MESSAGE_RETURN_NOT_ENOUGH_SPACE.\n"); break;
+    case STUN_MESSAGE_RETURN_UNSUPPORTED_ADDRESS: printf("StunMessageReturn:   STUN_MESSAGE_RETURN_UNSUPPORTED_ADDRESS.\n"); break;
+    default: printf("StunMessageReturn: unknown.\n"); break;
   }
 }
