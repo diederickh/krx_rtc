@@ -18,20 +18,16 @@ struct udp_conn {
   int sock;
   int port;
   struct sockaddr_in saddr;
-  char buf[KRX_UDP_BUF_LEN];
-
-  /* stun */
-  StunAgent agent;
-  StunMessage request;
-  StunMessage response;
+  unsigned char buf[KRX_UDP_BUF_LEN];
 };
 
 bool must_run = true;
 void krx_udp_sighandler(int num);
 int krx_udp_init(udp_conn* c);
-int krx_stun_init(udp_conn* c);
 int krx_udp_bind(udp_conn* c);
 int krx_udp_receive(udp_conn* c);
+void print_buffer(uint8_t *buf, size_t len);
+int handle_stun(uint8_t *packet, size_t len); 
 
 int main() {
   printf("udp.\n");
@@ -41,10 +37,6 @@ int main() {
   con.port = 2233;
 
   if(krx_udp_init(&con) < 0) {
-    ::exit(EXIT_FAILURE);
-  }
-
-  if(krx_stun_init(&con) < 0) {
     ::exit(EXIT_FAILURE);
   }
 
@@ -84,12 +76,6 @@ int krx_udp_init(udp_conn* c) {
   return 1;
 }
 
-int krx_stun_init(udp_conn* c) {
-  uint16_t attr[] = {STUN_ATTRIBUTE_USERNAME, STUN_ATTRIBUTE_ERROR_CODE, STUN_ATTRIBUTE_MESSAGE_INTEGRITY};
-  stun_agent_init(&c->agent, attr, STUN_COMPATIBILITY_RFC3489, STUN_AGENT_USAGE_IGNORE_CREDENTIALS);
-  return 1;
-}
-
 int krx_udp_bind(udp_conn* c) {
   int r = bind(c->sock, (struct sockaddr*)&c->saddr, sizeof(c->saddr));
   if(r == 0) {
@@ -112,19 +98,47 @@ int krx_udp_receive(udp_conn* c) {
     return -1;
   }
 
-  printf("Got some data:\n");
-  for(int i = 0; i < r; ++i) {
-    printf("%02X ", (unsigned char)c->buf[i]);
+  print_buffer(c->buf, r);
+  handle_stun(c->buf, r);
+
+  return 0;
+}
+
+int handle_stun(uint8_t *packet, size_t len) {
+  StunAgent agent;
+  StunValidationStatus status;
+  StunMessage request;
+  StunMessage response;
+  int ret;
+  int response_size;
+  uint8_t output_buffer[1024];
+
+  static const uint16_t attr[] = { STUN_ATTRIBUTE_USERNAME, 
+                                   STUN_ATTRIBUTE_ERROR_CODE, 
+                                   STUN_ATTRIBUTE_MESSAGE_INTEGRITY};
+
+  stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC3489, STUN_AGENT_USAGE_IGNORE_CREDENTIALS);
+  
+  status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
+  printf("Stun validation status: %d\n", status);
+
+  ret = stun_agent_init_response(&agent, &response, output_buffer, 1024, &request);
+  printf("Stun agent_init_response ret: %d\n", ret);
+
+  response_size = stun_agent_finish_message(&agent, &response, NULL, 0);
+  printf("Stun response size: %d\n", (int)response_size);
+
+  print_buffer(output_buffer, response_size);
+  return 1;
+}
+
+void print_buffer(uint8_t *buf, size_t len) {
+  int i;
+  for(int i = 0; i < len; ++i) {
+    printf("%02X ", (unsigned char)buf[i]);
     if(i > 0 && i % 40 == 0) {
       printf("\n");
     }
   }
-
-  StunValidationStatus status = stun_agent_validate(&c->agent, &c->request, (const uint8_t*)c->buf, (size_t)r, NULL, NULL);
-  if(status != STUN_VALIDATION_SUCCESS) {
-    printf("Error: Stun agent didn't validate.\n");
-    return -1;
-  }
-
-  return 0;
+  printf("\n-\n");
 }
