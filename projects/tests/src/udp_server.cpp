@@ -119,14 +119,15 @@ static int handle_stun(uint8_t *packet, size_t len) {
   status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
   print_stun_validation_status(status);
 
-  ret = stun_agent_init_response(&agent, &response, output_buffer, 1024, &request);
-  printf("Stun agent_init_response ret: %d\n", ret);
-
   ret = stun_agent_init_response(&agent, &response, output, 1024, &request);
   printf("Stun agent_init_response ret: %d", ret);
+
   output_size = stun_agent_finish_message(&agent, &response, NULL, 0);
-  printf("Stun response size: %zu", output_size);
+  printf("Stun response size: %d", (int)output_size);
+
   print_buffer(output, output_size);
+
+  return 0;
 }
 
 
