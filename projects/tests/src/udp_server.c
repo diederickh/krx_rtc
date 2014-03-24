@@ -104,15 +104,18 @@ static void print_buffer(uint8_t *buf, size_t len) {
 static int handle_stun(uint8_t *packet, size_t len) {
   StunAgent agent;
   StunValidationStatus status;
+  StunAgentUsageFlags flags;
   StunMessage request;
   StunMessage response;
   int ret;
   size_t output_size;
   uint8_t output[1024];
-  static const uint16_t attr[] = {STUN_ATTRIBUTE_USERNAME, STUN_ATTRIBUTE_MESSAGE_INTEGRITY};
+  //static const uint16_t attr[] = {STUN_ATTRIBUTE_USERNAME, STUN_ATTRIBUTE_MESSAGE_INTEGRITY};
+  static const uint16_t attr[] = {};
+  flags = STUN_AGENT_USAGE_NO_ALIGNED_ATTRIBUTES | STUN_AGENT_USAGE_IGNORE_CREDENTIALS;
   output_size = 0;
   memset(output, 0, sizeof(output));
-  stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC3489, STUN_AGENT_USAGE_IGNORE_CREDENTIALS);
+  stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC3489, flags);
 
   status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
   print_stun_validation_status(status);
