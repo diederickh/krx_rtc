@@ -101,6 +101,7 @@ static void print_buffer(uint8_t *buf, size_t len) {
       printf("\n");
     }
   }
+  printf("\n-\n");
 }
 
 static int handle_stun(uint8_t *packet, size_t len) {
