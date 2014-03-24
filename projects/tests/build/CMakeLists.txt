@@ -21,6 +21,7 @@ set(libraries
 )
 
 target_link_libraries(udp_client ${libraries})
+target_link_libraries(udp_server ${libraries})
  
 set(CMAKE_INSTALL_PREFIX ${install_dir})
 
