@@ -19,6 +19,11 @@ struct udp_conn {
   int port;
   struct sockaddr_in saddr;
   unsigned char buf[KRX_UDP_BUF_LEN];
+
+  /* stun */
+  StunAgent agent;
+  StunMessage request;
+  StunMessage response;
 };
 
 bool must_run = true;
@@ -26,9 +31,9 @@ void krx_udp_sighandler(int num);
 int krx_udp_init(udp_conn* c);
 int krx_udp_bind(udp_conn* c);
 int krx_udp_receive(udp_conn* c);
-void print_buffer(uint8_t *buf, size_t len);
+static void print_buffer(uint8_t *buf, size_t len);
 void print_stun_validation_status(StunValidationStatus s);
-int handle_stun(uint8_t *packet, size_t len); 
+static int handle_stun(uint8_t *packet, size_t len); 
 
 int main() {
   printf("udp.\n");
@@ -88,8 +93,45 @@ int krx_udp_bind(udp_conn* c) {
   return -1;
 }
 
+static void print_buffer(uint8_t *buf, size_t len) {
+  int i;
+  for(int i = 0; i < len; ++i) {
+    printf("%02X ", (unsigned char)buf[i]);
+    if(i > 0 && i % 40 == 0) {
+      printf("\n");
+    }
+  }
+}
+
+static int handle_stun(uint8_t *packet, size_t len) {
+  StunAgent agent;
+  StunValidationStatus status;
+  StunMessage request;
+  StunMessage response;
+  int ret;
+  int output_size;
+  uint8_t output[1024];
+  static const uint16_t attr[] = {STUN_ATTRIBUTE_USERNAME, STUN_ATTRIBUTE_MESSAGE_INTEGRITY};
+  output_size = 0;
+  memset(output, 0, sizeof(output));
+  stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC3489, STUN_AGENT_USAGE_IGNORE_CREDENTIALS);
+
+  status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
+  print_stun_validation_status(status);
+
+  ret = stun_agent_init_response(&agent, &response, output_buffer, 1024, &request);
+  printf("Stun agent_init_response ret: %d\n", ret);
+
+  ret = stun_agent_init_response(&agent, &response, output, 1024, &request);
+  printf("Stun agent_init_response ret: %d", ret);
+  output_size = stun_agent_finish_message(&agent, &response, NULL, 0);
+  printf("Stun response size: %zu", output_size);
+  print_buffer(output, output_size);
+}
+
+
 int krx_udp_receive(udp_conn* c) {
-  
+
   struct sockaddr_in client;
   socklen_t len = sizeof(client);
   int r = recvfrom(c->sock, c->buf, KRX_UDP_BUF_LEN, 0, (struct sockaddr*)&client, &len);
@@ -99,49 +141,11 @@ int krx_udp_receive(udp_conn* c) {
     return -1;
   }
 
+  printf("Got some data:\n");
   print_buffer(c->buf, r);
   handle_stun(c->buf, r);
 
   return 0;
-}
-
-int handle_stun(uint8_t *packet, size_t len) {
-  StunAgent agent;
-  StunValidationStatus status;
-  StunMessage request;
-  StunMessage response;
-  int ret;
-  int response_size;
-  uint8_t output_buffer[1024];
-
-  static const uint16_t attr[] = { STUN_ATTRIBUTE_USERNAME, 
-                                   STUN_ATTRIBUTE_ERROR_CODE, 
-                                   STUN_ATTRIBUTE_MESSAGE_INTEGRITY};
-
-  stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC3489, STUN_AGENT_USAGE_IGNORE_CREDENTIALS);
-  
-  status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
-  print_stun_validation_status(status);
-
-  ret = stun_agent_init_response(&agent, &response, output_buffer, 1024, &request);
-  printf("Stun agent_init_response ret: %d\n", ret);
-
-  response_size = stun_agent_finish_message(&agent, &response, NULL, 0);
-  printf("Stun response size: %d\n", (int)response_size);
-
-  print_buffer(output_buffer, response_size);
-  return 1;
-}
-
-void print_buffer(uint8_t *buf, size_t len) {
-  int i;
-  for(int i = 0; i < len; ++i) {
-    printf("%02X ", (unsigned char)buf[i]);
-    if(i > 0 && i % 40 == 0) {
-      printf("\n");
-    }
-  }
-  printf("\n-\n");
 }
 
 void print_stun_validation_status(StunValidationStatus s) {
