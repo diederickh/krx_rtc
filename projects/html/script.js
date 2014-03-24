@@ -25,8 +25,11 @@ function krx_init() {
   
   vid_input = $('#input_video')[0];
   vid_output = $('#output_video')[0];
-  sdp_input = $('#video_input_sdp');
-  sdp_output = $('#video_output_sdp');
+  sdp_output = document.getElementById('video_output_sdp');
+  sdp_input = document.getElementById('video_input_sdp');
+  sdp_output.value = '';
+  sdp_input.value = '';
+
 
   // ice servers
   var servers = {
@@ -39,6 +42,7 @@ function krx_init() {
   pc_sender = new window.RTCPeerConnection(servers);
   pc_sender.onicecandidate = function(evt) {
     console.log("onicecandidate");
+    console.log(evt);
   };
   
   // receiver peer connection
@@ -75,7 +79,8 @@ function krx_init() {
     // load the SDP 
     pc_sender.createOffer(
       function(desc) {
-        sdp_input.text(desc.sdp);
+        console.log("offer", desc.sdp);
+        sdp_input.value = desc.sdp
       },
       function(err) {
         console.log(err.message);
@@ -95,12 +100,15 @@ function krx_init() {
   $('#start_streaming').click(function(){
 
     // get sdp from textarea
-    var input_sdp_val = sdp_input.text();
+    var input_sdp_val = document.getElementById("video_input_sdp").value;
     if(input_sdp_val.length == 0) {
       console.log("No sdp text found.");
       return;
     }
-    sdp_output.text(input_sdp_val);
+
+    console.log("sdp_input", input_sdp_val);
+
+    sdp_output.value = input_sdp_val;
 
     // set the offer SDPs
     var isdp = new window.RTCSessionDescription({type:"offer", sdp:input_sdp_val});
@@ -110,7 +118,13 @@ function krx_init() {
     // set the answer SDPs
     pc_receiver.createAnswer(
       function(desc) {
-        pc_sender.setRemoteDescription(desc);
+        console.log("createdAnswer.");
+        console.log(desc);
+        var remote_changed_sdp = new window.RTCSessionDescription({type:"answer", sdp:input_sdp_val});
+        console.log("using");
+        console.log(input_sdp_val);
+        pc_sender.setRemoteDescription(remote_changed_sdp);
+        //pc_sender.setRemoteDescription(desc);
         pc_receiver.setLocalDescription(desc);
       },
       function(err) {
