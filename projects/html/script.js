@@ -118,11 +118,11 @@ function krx_init() {
     // set the answer SDPs
     pc_receiver.createAnswer(
       function(desc) {
-        console.log("createdAnswer.");
-        console.log(desc);
+        //console.log("createdAnswer.");
+        //console.log(desc);
         var remote_changed_sdp = new window.RTCSessionDescription({type:"answer", sdp:input_sdp_val});
-        console.log("using");
-        console.log(input_sdp_val);
+        //console.log("using");
+        //console.log(input_sdp_val);
         pc_sender.setRemoteDescription(remote_changed_sdp);
         //pc_sender.setRemoteDescription(desc);
         pc_receiver.setLocalDescription(desc);
