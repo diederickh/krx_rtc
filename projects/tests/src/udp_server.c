@@ -195,6 +195,9 @@ int handle_stun(udp_conn* c, uint8_t *packet, size_t len) {
   stun_message_id(&response, transid);
   magic_cookie = *((uint32_t*)transid);
   socklen_t sock_len = sizeof(c->client);
+  char client_ip[16] = { 0 } ;
+  inet_ntop(AF_INET, &c->client.sin_addr.s_addr, client_ip, sizeof(client_ip));
+  printf("Received data from: %s\n", client_ip);
   StunMessageReturn append_ret = stun_message_append_xor_addr_full(&response, STUN_ATTRIBUTE_XOR_MAPPED_ADDRESS, 
                                                                    (const struct sockaddr*)&c->client, sock_len,
                                                                    magic_cookie);
