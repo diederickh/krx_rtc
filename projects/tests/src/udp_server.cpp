@@ -29,9 +29,10 @@ struct udp_conn {
 bool must_run = true;
 void krx_udp_sighandler(int num);
 int krx_udp_init(udp_conn* c);
-int krx_stun_init(udp_conn* c);
 int krx_udp_bind(udp_conn* c);
 int krx_udp_receive(udp_conn* c);
+static void print_buffer(uint8_t *buf, size_t len);
+static int handle_stun(uint8_t *packet, size_t len);
 
 int main() {
   printf("udp.\n");
@@ -41,10 +42,6 @@ int main() {
   con.port = 2233;
 
   if(krx_udp_init(&con) < 0) {
-    ::exit(EXIT_FAILURE);
-  }
-
-  if(krx_stun_init(&con) < 0) {
     ::exit(EXIT_FAILURE);
   }
 
@@ -81,12 +78,6 @@ int krx_udp_init(udp_conn* c) {
   c->saddr.sin_addr.s_addr = htonl(INADDR_ANY);
   c->saddr.sin_port = htons(c->port);
 
-  return 1;
-}
-
-int krx_stun_init(udp_conn* c) {
-  uint16_t attr[] = {STUN_ATTRIBUTE_USERNAME, STUN_ATTRIBUTE_ERROR_CODE, STUN_ATTRIBUTE_MESSAGE_INTEGRITY};
-  stun_agent_init(&c->agent, attr, STUN_COMPATIBILITY_RFC3489, STUN_AGENT_USAGE_IGNORE_CREDENTIALS);
   return 1;
 }
 
