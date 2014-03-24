@@ -4,10 +4,12 @@ project(udp_test)
 
 include(Triplet.cmake)
 
-message(STATUS ${extern_lib_dir})
 set(bd ${CMAKE_CURRENT_LIST_DIR})
 
-include_directories(${extern_include_dir})
+include_directories(
+  ${extern_include_dir}
+  ${install_dir}/include/
+)
 
 add_executable(udp_server ${bd}/../src/udp_server.cpp)
 add_executable(udp_client ${bd}/../src/udp_client.cpp)
@@ -15,6 +17,7 @@ add_executable(udp_client ${bd}/../src/udp_client.cpp)
 set(libraries
   ${extern_lib_dir}/libssl.a
   ${extern_lib_dir}/libcrypto.a
+  ${install_dir}/lib/libstun.a
 )
 
 target_link_libraries(udp_client ${libraries})
