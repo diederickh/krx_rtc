@@ -18,7 +18,7 @@ struct udp_conn {
   int sock;
   int port;
   struct sockaddr_in saddr;
-  char buf[KRX_UDP_BUF_LEN];
+  unsigned char buf[KRX_UDP_BUF_LEN];
 
   /* stun */
   StunAgent agent;
@@ -101,8 +101,39 @@ int krx_udp_bind(udp_conn* c) {
   return -1;
 }
 
+static void print_buffer(uint8_t *buf, size_t len) {
+  int i;
+  for(int i = 0; i < len; ++i) {
+    printf("%02X ", (unsigned char)buf[i]);
+    if(i > 0 && i % 40 == 0) {
+      printf("\n");
+    }
+  }
+}
+
+static int handle_stun(uint8_t *packet, size_t len) {
+  StunAgent agent;
+  StunValidationStatus status;
+  StunMessage request;
+  StunMessage response;
+  int ret;
+  int output_size;
+  uint8_t output[1024];
+  static const uint16_t attr[] = {STUN_ATTRIBUTE_USERNAME, STUN_ATTRIBUTE_MESSAGE_INTEGRITY};
+  output_size = 0;
+  memset(output, 0, sizeof(output));
+  stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC3489, STUN_AGENT_USAGE_IGNORE_CREDENTIALS);
+  status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
+  printf("Stun validation status: %d", status);
+  ret = stun_agent_init_response(&agent, &response, output, 1024, &request);
+  printf("Stun agent_init_response ret: %d", ret);
+  output_size = stun_agent_finish_message(&agent, &response, NULL, 0);
+  printf("Stun response size: %zu", output_size);
+  print_buffer(output, output_size);
+}
+
 int krx_udp_receive(udp_conn* c) {
-  
+
   struct sockaddr_in client;
   socklen_t len = sizeof(client);
   int r = recvfrom(c->sock, c->buf, KRX_UDP_BUF_LEN, 0, (struct sockaddr*)&client, &len);
@@ -113,18 +144,8 @@ int krx_udp_receive(udp_conn* c) {
   }
 
   printf("Got some data:\n");
-  for(int i = 0; i < r; ++i) {
-    printf("%02X ", (unsigned char)c->buf[i]);
-    if(i > 0 && i % 40 == 0) {
-      printf("\n");
-    }
-  }
-
-  StunValidationStatus status = stun_agent_validate(&c->agent, &c->request, (const uint8_t*)c->buf, (size_t)r, NULL, NULL);
-  if(status != STUN_VALIDATION_SUCCESS) {
-    printf("Error: Stun agent didn't validate.\n");
-    return -1;
-  }
+  print_buffer(c->buf, r);
+  handle_stun(c->buf, r);
 
   return 0;
 }
