@@ -31,6 +31,8 @@ int krx_udp_receive(udp_conn* c);
 int krx_udp_send(udp_conn* c, struct sockaddr_in* client, uint8_t* buf, size_t len);
 void print_buffer(uint8_t *buf, size_t len);
 void print_stun_validation_status(StunValidationStatus s);
+void print_stun_class(StunClass c);
+void print_stun_method(StunMethod m);
 int handle_stun(uint8_t *packet, size_t len); 
 
 int main() {
@@ -173,6 +175,16 @@ int handle_stun(uint8_t *packet, size_t len) {
   status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
   print_stun_validation_status(status);
 
+  StunClass request_class = stun_message_get_class(&request);
+  if(request_class == STUN_ERROR) {
+    printf("Error: request stun class failed.\n");
+    exit(0);
+  }
+  print_stun_class(request_class);
+
+  StunMethod request_method = stun_message_get_method(&request);
+  print_stun_method(request_method);
+
   ret = stun_agent_init_response(&agent, &response, output, 1024, &request);
   printf("Stun agent_init_response ret: %d\n", ret);
 
@@ -199,7 +211,7 @@ int krx_udp_receive(udp_conn* c) {
   print_buffer(c->buf, r);
   handle_stun(c->buf, r);
 
-  //krx_udp_send(c, &client, c->buf, r);
+  //  krx_udp_send(c, &client, c->buf, r);
 
   return 0;
 }
@@ -215,7 +227,7 @@ int krx_udp_send(udp_conn* c, struct sockaddr_in* client, uint8_t* buf, size_t l
     ::exit(EXIT_FAILURE);
   }
   */
-  int r = sendto(c->sock, buf, len, 0, (struct sockaddr*)client, sizeof(client));
+  int r = sendto(c->sock, buf, len, 0, (struct sockaddr*)client, sizeof(*client));
   printf("r: %d\n", r);
 
   return 0;
@@ -233,5 +245,30 @@ void print_stun_validation_status(StunValidationStatus s) {
     case STUN_VALIDATION_UNKNOWN_REQUEST_ATTRIBUTE: printf("StunValidationStatus: STUN_VALIDATION_UNKNOWN_REQUEST_ATTRIBUTE\n");  break;
     case STUN_VALIDATION_UNKNOWN_ATTRIBUTE:         printf("StunValidationStatus: STUN_VALIDATION_UNKNOWN_ATTRIBUTE\n");          break;
     default:                                        printf("StunValidationStatus: unknown status.\n");                            break;
+  }
+}
+
+void print_stun_class(StunClass c) {
+  switch(c) { 
+    case STUN_REQUEST:     printf("StunClass: STUN_REQUEST.\n");     break;
+    case STUN_INDICATION:  printf("StunClass: STUN_INDICATION.\n");  break;
+    case STUN_RESPONSE:    printf("StunClass: STUN_RESPONSE.\n");    break;
+    case STUN_ERROR:       printf("StunClass: STUN_ERROR.\n");       break;
+    default:               printf("StunClass: unknown.\n");          break;
+  }
+}
+
+void print_stun_method(StunMethod m) {
+  switch(m) {
+    case STUN_BINDING:            printf("StunMethod: STUN_BINDING.\n");                                       break;
+    case STUN_SHARED_SECRET:      printf("StunMethod: STUN_SHARED_SECRET.\n");                                 break;
+    case STUN_ALLOCATE:           printf("StunMethod: STUN_ALLOCATE.\n");                                      break;
+    case STUN_REFRESH:            printf("StunMethod: STUN_REFRESH or STUN_SET_ACTIVE_DST or STUN_SEND.\n");   break;
+    case STUN_CONNECT:            printf("StunMethod: STUN_CONNECT.\n");                                       break;
+    case STUN_IND_SEND:           printf("StunMethod: STUN_IND_SEND or STUN_OLD_SET_ACTIVE_DST.\n");           break;
+    case STUN_IND_DATA:           printf("StunMethod: STUN_IND_DATA.\n");                                      break;
+    case STUN_CREATEPERMISSION:   printf("StunMethod: STUN_CREATEPERMISSION or STUN_IND_CONNECT_STATUS.\n");   break;
+    case STUN_CHANNELBIND:        printf("StunMethod: STUN_CHANNELBIND.\n");                                   break;
+    default:                      printf("StunMethod: unkown.\n");                                             break;
   }
 }
