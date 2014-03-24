@@ -109,7 +109,7 @@ static int handle_stun(uint8_t *packet, size_t len) {
   StunMessage request;
   StunMessage response;
   int ret;
-  int output_size;
+  size_t output_size;
   uint8_t output[1024];
   static const uint16_t attr[] = {STUN_ATTRIBUTE_USERNAME, STUN_ATTRIBUTE_MESSAGE_INTEGRITY};
   output_size = 0;
