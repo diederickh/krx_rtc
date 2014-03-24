@@ -111,7 +111,6 @@ static int handle_stun(uint8_t *packet, size_t len) {
   uint8_t output[1024];
 
   static const uint16_t attr[] = { 
-
     STUN_ATTRIBUTE_MAPPED_ADDRESS,
     STUN_ATTRIBUTE_RESPONSE_ADDRESS,
     STUN_ATTRIBUTE_CHANGE_REQUEST,
