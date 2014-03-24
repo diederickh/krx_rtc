@@ -115,11 +115,11 @@ static int handle_stun(uint8_t *packet, size_t len) {
   memset(output, 0, sizeof(output));
   stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC3489, STUN_AGENT_USAGE_IGNORE_CREDENTIALS);
   status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
-  printf("Stun validation status: %d", status);
+  printf("Stun validation status: %d\n", status);
   ret = stun_agent_init_response(&agent, &response, output, 1024, &request);
-  printf("Stun agent_init_response ret: %d", ret);
+  printf("Stun agent_init_response ret: %d\n", ret);
   output_size = stun_agent_finish_message(&agent, &response, NULL, 0);
-  printf("Stun response size: %zu", output_size);
+  printf("Stun response size: %zu\n", output_size);
   print_buffer(output, output_size);
 }
 
