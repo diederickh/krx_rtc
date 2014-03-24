@@ -94,7 +94,7 @@ function krx_init() {
 
   // kickoff
   $("#init_gum_input").click(function() {
-    navigator.getUserMedia({video:true}, krx_gum_success, krx_gum_error);
+    navigator.getUserMedia({video:true, audio:false}, krx_gum_success, krx_gum_error);
   });
 
   $('#start_streaming').click(function(){

@@ -27,3 +27,4 @@ set(CMAKE_INSTALL_PREFIX ${install_dir})
 
 install(TARGETS udp_server DESTINATION bin)
 install(TARGETS udp_client DESTINATION bin)
+

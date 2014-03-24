@@ -11,12 +11,19 @@
 #define KRX_UDP_BUF_LEN 512
 
 typedef struct {
-  /* networking */
+
+  /* initial networking */
   int sock;
   int port;
   struct sockaddr_in saddr;
   unsigned char buf[KRX_UDP_BUF_LEN];
   struct sockaddr_in client;
+
+  /* stun based listening */
+  int stun_fd;
+  int stun_port;
+  struct sockaddr_in stun_saddr;
+  struct sockaddr_in stun_raddr;
 
   /* stun */
   StunAgent agent;
@@ -117,7 +124,7 @@ int handle_stun(udp_conn* c, uint8_t *packet, size_t len) {
   size_t output_size;
   uint8_t output[1024];
 
-  flags = STUN_AGENT_USAGE_IGNORE_CREDENTIALS;
+  flags = STUN_AGENT_USAGE_IGNORE_CREDENTIALS; 
 
   static const uint16_t attr[] = { 
     STUN_ATTRIBUTE_MAPPED_ADDRESS,
@@ -170,49 +177,82 @@ int handle_stun(udp_conn* c, uint8_t *packet, size_t len) {
     STUN_ATTRIBUTE_CANDIDATE_IDENTIFIER
   };
 
+  /* initialize our agent to be compatible with RFC5389 (= with TLS support) */
   output_size = 0;
   memset(output, 0, sizeof(output));
-  stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC3489, flags);
+  stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC5389, flags);
 
+  /* validate the request */
   status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
   print_stun_validation_status(status);
 
+  /* check the class */
   StunClass request_class = stun_message_get_class(&request);
+  print_stun_class(request_class);
   if(request_class == STUN_ERROR) {
     printf("Error: request stun class failed.\n");
     exit(0);
   }
-  print_stun_class(request_class);
 
+  /* what stun method? */
   StunMethod request_method = stun_message_get_method(&request);
   print_stun_method(request_method);
 
+  /* initialize the response */
   ret = stun_agent_init_response(&agent, &response, output, 1024, &request);
   printf("Stun agent_init_response ret: %d\n", ret);
 
-  // --------
+  /* add xor-mapped-address */
   uint32_t magic_cookie = 0;
+  uint8_t* cookie_ptr = NULL;
   StunTransactionId transid;
+  socklen_t sock_len = 0;
+  char client_ip[16] = { 0 } ;
+  StunMessageReturn stun_ret = STUN_MESSAGE_RETURN_INVALID;
+
   stun_message_id(&response, transid);
   magic_cookie = *((uint32_t*)transid);
-  socklen_t sock_len = sizeof(c->client);
-  char client_ip[16] = { 0 } ;
-  uint8_t* p = (uint8_t*) &magic_cookie;
-  printf("Magic cookie: %02X %02X %02X %02X\n", p[0], p[1], p[2], p[3]);
+  sock_len = sizeof(c->client);
+  cookie_ptr = (uint8_t*) &magic_cookie;
   inet_ntop(AF_INET, &c->client.sin_addr.s_addr, client_ip, sizeof(client_ip));
-  printf("Received data from: %s\n", client_ip);
-  StunMessageReturn append_ret = stun_message_append_xor_addr(&response, STUN_ATTRIBUTE_XOR_MAPPED_ADDRESS, 
-                                                              (const struct sockaddr*)&c->client, sock_len);
- print_stun_message_return(append_ret);
-  // --------
 
-  output_size = stun_agent_finish_message(&agent, &response, NULL, 0);
-  printf("Stun response size: %d\n", (int)output_size);
+  stun_ret = stun_message_append_xor_addr(&response, STUN_ATTRIBUTE_XOR_MAPPED_ADDRESS, (const struct sockaddr*)&c->client, sock_len);
+  print_stun_message_return(stun_ret);
+
+  printf("Received data from: %s\n", client_ip);
+  printf("Magic cookie: %02X %02X %02X %02X\n", cookie_ptr[0], cookie_ptr[1], cookie_ptr[2], cookie_ptr[3]);
   
+  // username
+  // --------
+  const char* username = NULL;
+  uint16_t username_len = 0;
+  username = (const char*)stun_message_find(&request, STUN_ATTRIBUTE_USERNAME, &username_len);
+  printf("Username: %s, len: %d\n", username, (int)username_len);
+
+#if 0
+  if(username) {
+    StunMessageReturn username_res = stun_message_append_bytes(&response, STUN_ATTRIBUTE_USERNAME, username, username_len);
+    print_stun_message_return(username_res);
+
+  }
+  uint32_t fingerprint = 0;
+  if(stun_message_find32(&request, STUN_ATTRIBUTE_FINGERPRINT, &fingerprint) == STUN_MESSAGE_RETURN_SUCCESS) {
+    printf("Got fingerprint: %d\n", fingerprint);
+    if(stun_message_append32(&response, STUN_ATTRIBUTE_FINGERPRINT, fingerprint) != STUN_MESSAGE_RETURN_SUCCESS) {
+      printf("Error while adding the fingerprint.\n");
+    }
+  }
+#endif
+
+  // password
+  const char* password = "30efe3c2f9f3717a1edcb92d33742c7b";
+  uint16_t password_len = strlen(password) + 1;
+  output_size = stun_agent_finish_message(&agent, &response, (const uint8_t*) password, password_len);
+
+  // answer to the connection
   krx_udp_send(c, output, output_size);
 
   print_buffer(output, output_size);
-
   return 0;
 }
 
@@ -284,13 +324,12 @@ void print_stun_method(StunMethod m) {
 }
 
 void print_stun_message_return(StunMessageReturn r) {
-
   switch(r) {
-    case STUN_MESSAGE_RETURN_SUCCESS: printf("StunMessageReturn: STUN_MESSAGE_RETURN_SUCCESS.\n"); break;
-    case STUN_MESSAGE_RETURN_NOT_FOUND: printf("StunMessageReturn:   STUN_MESSAGE_RETURN_NOT_FOUND.\n"); break;
-    case STUN_MESSAGE_RETURN_INVALID: printf("StunMessageReturn:   STUN_MESSAGE_RETURN_INVALID.\n"); break;
-    case STUN_MESSAGE_RETURN_NOT_ENOUGH_SPACE: printf("StunMessageReturn:   STUN_MESSAGE_RETURN_NOT_ENOUGH_SPACE.\n"); break;
-    case STUN_MESSAGE_RETURN_UNSUPPORTED_ADDRESS: printf("StunMessageReturn:   STUN_MESSAGE_RETURN_UNSUPPORTED_ADDRESS.\n"); break;
+    case STUN_MESSAGE_RETURN_SUCCESS:             printf("StunMessageReturn: STUN_MESSAGE_RETURN_SUCCESS.\n");             break;
+    case STUN_MESSAGE_RETURN_NOT_FOUND:           printf("StunMessageReturn: STUN_MESSAGE_RETURN_NOT_FOUND.\n");           break;
+    case STUN_MESSAGE_RETURN_INVALID:             printf("StunMessageReturn: STUN_MESSAGE_RETURN_INVALID.\n");             break;
+    case STUN_MESSAGE_RETURN_NOT_ENOUGH_SPACE:    printf("StunMessageReturn: STUN_MESSAGE_RETURN_NOT_ENOUGH_SPACE.\n");    break;
+    case STUN_MESSAGE_RETURN_UNSUPPORTED_ADDRESS: printf("StunMessageReturn: STUN_MESSAGE_RETURN_UNSUPPORTED_ADDRESS.\n"); break;
     default: printf("StunMessageReturn: unknown.\n"); break;
   }
 }
