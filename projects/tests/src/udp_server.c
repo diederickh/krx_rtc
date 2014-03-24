@@ -10,6 +10,29 @@
 
 #define KRX_UDP_BUF_LEN 512
 
+/*
+
+  1)  Open index.html in your browser (e.g. start local webserver: 
+
+         cd projects/html
+         python -m SimpleHTTPServer
+ 
+         open http://localhost:8000/
+
+  2) Press the START button.
+
+  3) - Copy & Paste the a=ice-pwd:<COPY_THIS_VALUE>, into the "password" string  below in handle_stun().
+     - Execute the release.sh from the build script to kick off the udp-server with this password
+
+  4) In your browser change the port of the first ice-canditate to 2233
+  
+     e.g. from: a=candidate:0 1 UDP 2130379007 192.168.0.194 50318 typ host
+          to:   a=candidate:0 1 UDP 2130379007 192.168.0.194 2233 typ host
+     
+  5) Press the >> button
+
+ */
+
 typedef struct {
 
   /* initial networking */
