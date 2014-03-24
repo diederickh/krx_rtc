@@ -32,7 +32,8 @@ int krx_udp_init(udp_conn* c);
 int krx_udp_bind(udp_conn* c);
 int krx_udp_receive(udp_conn* c);
 static void print_buffer(uint8_t *buf, size_t len);
-static int handle_stun(uint8_t *packet, size_t len);
+void print_stun_validation_status(StunValidationStatus s);
+static int handle_stun(uint8_t *packet, size_t len); 
 
 int main() {
   printf("udp.\n");
@@ -116,12 +117,14 @@ static int handle_stun(uint8_t *packet, size_t len) {
   stun_agent_init(&agent, attr, STUN_COMPATIBILITY_RFC3489, STUN_AGENT_USAGE_IGNORE_CREDENTIALS);
   status = stun_agent_validate(&agent, &request, packet, len, NULL, NULL);
   printf("Stun validation status: %d\n", status);
+  print_stun_validation_status(status);
   ret = stun_agent_init_response(&agent, &response, output, 1024, &request);
   printf("Stun agent_init_response ret: %d\n", ret);
   output_size = stun_agent_finish_message(&agent, &response, NULL, 0);
   printf("Stun response size: %zu\n", output_size);
   print_buffer(output, output_size);
 }
+
 
 int krx_udp_receive(udp_conn* c) {
 
@@ -139,4 +142,19 @@ int krx_udp_receive(udp_conn* c) {
   handle_stun(c->buf, r);
 
   return 0;
+}
+
+void print_stun_validation_status(StunValidationStatus s) {
+  switch(s) {
+    case STUN_VALIDATION_SUCCESS: printf("StunValidationStatus: STUN_VALIDATION_SUCCESS\n"); break;
+    case STUN_VALIDATION_NOT_STUN: printf("StunValidationStatus: STUN_VALIDATION_NOT_STUN\n"); break;
+    case STUN_VALIDATION_INCOMPLETE_STUN: printf("StunValidationStatus: STUN_VALIDATION_INCOMPLETE_STUN\n"); break;
+    case STUN_VALIDATION_BAD_REQUEST: printf("StunValidationStatus: STUN_VALIDATION_BAD_REQUEST\n"); break;
+    case STUN_VALIDATION_UNAUTHORIZED_BAD_REQUEST: printf("StunValidationStatus: STUN_VALIDATION_UNAUTHORIZED_BAD_REQUEST\n"); break;
+    case STUN_VALIDATION_UNAUTHORIZED: printf("StunValidationStatus: STUN_VALIDATION_UNAUTHORIZED\n"); break;
+    case STUN_VALIDATION_UNMATCHED_RESPONSE: printf("StunValidationStatus: STUN_VALIDATION_UNMATCHED_RESPONSE\n"); break;
+    case STUN_VALIDATION_UNKNOWN_REQUEST_ATTRIBUTE: printf("StunValidationStatus: STUN_VALIDATION_UNKNOWN_REQUEST_ATTRIBUTE\n"); break;
+    case STUN_VALIDATION_UNKNOWN_ATTRIBUTE: printf("StunValidationStatus: STUN_VALIDATION_UNKNOWN_ATTRIBUTE\n"); break;
+    default:printf("StunValidationStatus: unknown status.\n"); break;
+  }
 }
