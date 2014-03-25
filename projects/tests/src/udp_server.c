@@ -47,6 +47,7 @@ typedef struct {
   X509* client_cert;
   BIO* in;
   BIO* out;
+  bool conn_initialized;
 } krx_ssl;
 
 typedef struct {
@@ -379,7 +380,23 @@ int krx_udp_receive(udp_conn* c) {
     handle_stun(c, c->buf, r);
   }
   else {
+
     printf("No STUN: %02X %02X.\n", c->buf[0], c->buf[1]);
+
+    /* initialize SSL connection */
+    if(!c->ssl.conn_initialized) {
+      if(krx_ssl_conn_init(&c->ssl) < 0) {
+        exit(EXIT_FAILURE);
+      }
+    }
+    else {
+      printf("SSL connection is initialized.\n");
+    }
+
+    /* write SSL */
+    if(c->ssl.conn_initialized) {
+      //  SSL_write(c->ssl.ssl, c->buf, r);
+    }
   }
 
   return 0;
@@ -602,6 +619,8 @@ int krx_ssl_init(krx_ssl* k) {
     return -5;
   }
 
+  k->conn_initialized = false; 
+
   return 0;
 }
 
@@ -664,30 +683,38 @@ long krx_ssl_bio_ctrl(BIO* b, int cmd, long num, void* ptr) {
 /* initialize a new connection; @todo cleanup + free on failure */
 int krx_ssl_conn_init(krx_ssl* k) {
 
+  if(k->conn_initialized) {
+    printf("Error: already initialize the ssl connection.\n");
+    return -1;
+  }
+
   k->ssl = SSL_new(k->ctx);
   if(k->ssl == NULL) {
     printf("Error: cannot create the SSL object.\n");
     ERR_print_errors_fp(stderr);
-    return -1;
+    return -2;
   }
 
   k->in = BIO_new(&krx_bio);
   if(k->in == NULL) {
     printf("Error: cannot create the in BIO.\n");
     SSL_free(k->ssl);
-    return -2;
+    return -3;
   }
 
   k->out = BIO_new(&krx_bio);
   if(k->out == NULL) {
     BIO_free(k->in);
     SSL_free(k->ssl);
-    return -3;
+    return -4;
   }
 
   k->in->ptr = k;
   k->out->ptr = k;
 
   SSL_set_bio(k->ssl, k->in, k->out);
+
+  k->conn_initialized = true; 
+
   return 0;
 }
