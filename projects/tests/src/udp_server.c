@@ -41,6 +41,17 @@
 
  */
 
+/* SSL debug */
+#define SSL_WHERE_INFO(ssl, w, flag, msg) {         \
+    if(w & flag) {                                  \
+      printf("----- ");                             \
+      printf(msg);                                  \
+      printf(" - %s ", SSL_state_string_long(ssl)); \
+      printf(" - %s ", SSL_state_string(ssl));      \
+      printf("\n");                                 \
+    }                                               \
+  } 
+
 typedef struct {
   SSL* ssl;
   SSL_CTX* ctx;
@@ -48,6 +59,13 @@ typedef struct {
   BIO* in;
   BIO* out;
   bool conn_initialized;
+  uint8_t* in_buf;
+  int in_pos;
+  int in_len;
+  uint8_t* out_buf;
+  int out_pos;
+  int out_len;
+  void* user; /* udp_conn */
 } krx_ssl;
 
 typedef struct {
@@ -107,6 +125,7 @@ int krx_httpd_init(httpd_conn* c);
 void krx_httpd_receive(httpd_conn* c);
 
 /* SSL<>DTLS */
+void krx_ssl_info_callback(const SSL* ssl, int where, int ret);
 int krx_ssl_init(krx_ssl* k);
 int krx_ssl_conn_init(krx_ssl* k);
 int krx_ssl_bio_create(BIO* b);
@@ -114,6 +133,9 @@ int krx_ssl_bio_destroy(BIO* b);
 int krx_ssl_bio_read(BIO* b, char* buf, int len);
 int krx_ssl_bio_write(BIO* b, const char* buf, int len);
 long krx_ssl_bio_ctrl(BIO* b, int cmd, long num, void* ptr);
+
+int krx_ssl_encrypt(krx_ssl* k, uint8_t* out, int max, uint8_t* in, int len);
+int krx_ssl_decrypt(krx_ssl* k, uint8_t* out, int max, uint8_t* in, int len);
 
 static struct bio_method_st krx_bio = {
   BIO_TYPE_SOURCE_SINK,
@@ -139,7 +161,9 @@ int main() {
   /* WebRTC */
   udp_conn ucon;
   ucon.port = 2233;
+  ucon.ssl.user = &ucon;
   ucon_ptr = &ucon;
+
 
   /* SSL */
   if(krx_ssl_init(&ucon.ssl) < 0) {
@@ -395,7 +419,24 @@ int krx_udp_receive(udp_conn* c) {
 
     /* write SSL */
     if(c->ssl.conn_initialized) {
-      //  SSL_write(c->ssl.ssl, c->buf, r);
+      printf("Writing...\n");
+
+      /* TMP */
+      uint8_t send_buf[4096 * 10];
+      c->ssl.out_buf = send_buf;
+      c->ssl.out_len = 4096 * 10;
+      /* TMP */
+
+      uint8_t tmp_buf[4096];
+      int er = krx_ssl_decrypt(&c->ssl, tmp_buf, 4096, c->buf, r);
+      if(er < 0) {
+        printf("Error: krx_ssl_decrypt failed.\n");
+      }
+
+      
+      if(c->ssl.out_pos > 0) {
+        printf("-- Outbuffer: out_len: %d, out_pos: %d\n", c->ssl.out_len, c->ssl.out_pos);
+      }
     }
   }
 
@@ -405,7 +446,7 @@ int krx_udp_receive(udp_conn* c) {
 int krx_udp_send(udp_conn* c, uint8_t* buf, size_t len) {
 
   int r = sendto(c->sock, buf, len, 0, (struct sockaddr*)&c->client, sizeof(c->client));
-  printf("Sending data on connection: %d\n", r);
+  printf("Sending data on connection: %d, sock: %d\n", r, c->sock);
 
   return 0;
 }
@@ -645,24 +686,74 @@ int krx_ssl_bio_destroy(BIO* b) {
 }
 
 int krx_ssl_bio_read(BIO* b, char* buf, int len) {
-  printf("DTLS: bio read called with %d bytes.\n", len);
-  return 0;
+  printf("----- krx_ssl_bio_read() called with %d bytes.\n", len);
+  int r = 0;
+  int avail = 0;
+  krx_ssl* krx = (krx_ssl*)b->ptr;
+  
+  avail = (krx->in_len - krx->in_pos);
+  if(avail == 0) {
+    printf("----- Error: avail is 0.\n");
+    errno = EAGAIN;
+    return -1;
+  }
+
+  if(len > avail) {
+    r = avail;
+  }
+  else {
+    r = len;
+  }
+
+  memcpy(buf, krx->in_buf + krx->in_pos, r);
+  krx->in_pos += r;
+  printf("----- krx_ssl_bio_read(), avail: %d\n", avail);
+  return r;
 }
 
 int krx_ssl_bio_write(BIO* b, const char* buf, int len) {
-  printf("DTLS: bio write called with %d bytes.\n", len);
-  return 0;
+  printf("----- krx_ssl_bio_write() called with %d bytes.\n", len);
+  
+  int w = 0;
+  int avail = 0;
+  krx_ssl* krx = (krx_ssl*)b->ptr;
+
+  printf("----- krx_ssl_bio_write() krx->out_len: %d, krx->out_pos: %d.\n", krx->out_len, krx->out_pos);
+  
+  avail = (krx->out_len - krx->out_pos);
+  if(avail == 0) {
+    errno = EAGAIN;
+    printf("----- Error: avail is 0.\n");
+    return -1;
+  }
+
+  if(len > avail) {
+    w = avail;
+  }
+  else {
+    w = avail;
+  }
+
+  memcpy(krx->out_buf + krx->out_pos, buf, w);
+  krx->out_pos += w;
+  printf("OUT_POS: %d\n", krx->out_pos);
+  return w;
 }
 
 long krx_ssl_bio_ctrl(BIO* b, int cmd, long num, void* ptr) {
 
+  krx_ssl* krx = (krx_ssl*)b->ptr;
+
   switch (cmd) {
     case BIO_CTRL_FLUSH: {
-      printf("DTLS: BIO_CTRL_FLUSH.\n");
+      printf("----- DTLS: BIO_CTRL_FLUSH.\n");
+      //int krx_udp_send(udp_conn* c, uint8_t* buf, size_t len);
+      //printf("out_pos: %d\n", krx->out_pos);
+      //krx_udp_send((udp_conn*)krx->user, krx->out_buf, 1120); /* just a hardcoded test; sends back serverhello */
       return 1;
     } 
     case BIO_CTRL_WPENDING: {
-      printf("DTLS: BIO_CTRL_WPENDING: %ld.\n", num);
+      printf("----- DTLS: BIO_CTRL_WPENDING: %ld.\n", num);
       return 0;
     }
     case BIO_CTRL_DGRAM_QUERY_MTU: {
@@ -672,7 +763,7 @@ long krx_ssl_bio_ctrl(BIO* b, int cmd, long num, void* ptr) {
       return BIO_TYPE_SOURCE_SINK;
     }
     default: {
-      printf("DTLS: unhandled bio_ctrl: %d num: %ld\n", cmd, num);
+      printf("----- DTLS: unhandled bio_ctrl: %d num: %ld\n", cmd, num);
       break;
     }
   }
@@ -682,6 +773,8 @@ long krx_ssl_bio_ctrl(BIO* b, int cmd, long num, void* ptr) {
 
 /* initialize a new connection; @todo cleanup + free on failure */
 int krx_ssl_conn_init(krx_ssl* k) {
+
+  printf("------------ start initialize ssl_con -----------\n");
 
   if(k->conn_initialized) {
     printf("Error: already initialize the ssl connection.\n");
@@ -714,7 +807,112 @@ int krx_ssl_conn_init(krx_ssl* k) {
 
   SSL_set_bio(k->ssl, k->in, k->out);
 
+  SSL_set_accept_state(k->ssl);  /* set to accept state so it we act like we're a server */
+
+  SSL_CTX_set_info_callback(k->ctx, krx_ssl_info_callback);
+
   k->conn_initialized = true; 
 
+  printf("------------ end initialize ssl_con -----------\n");
   return 0;
 }
+
+
+void krx_ssl_info_callback(const SSL* ssl, int where, int ret) {
+
+  if(ret == 0) {
+    printf("-- krx_ssl_info_callback: error occured.\n");
+    return;
+  }
+
+  SSL_WHERE_INFO(ssl, where, SSL_CB_LOOP, "LOOP");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_EXIT, "EXIT");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_READ, "READ");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_WRITE, "WRITE");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_ALERT, "ALERT");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_READ_ALERT, "READ ALERT");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_WRITE_ALERT, "WRITE ALERT");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_ACCEPT_LOOP, "ACCEPT LOOP");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_ACCEPT_EXIT, "ACCEPT EXIT");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_CONNECT_LOOP, "CONNECT LOOP");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_CONNECT_EXIT, "CONNECT EXIT");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_HANDSHAKE_START, "HANDSHAKE START");
+  SSL_WHERE_INFO(ssl, where, SSL_CB_HANDSHAKE_DONE, "HANDSHAKE DONE");
+}
+
+int krx_ssl_encrypt(krx_ssl* k, uint8_t* out, int max, uint8_t* in, int len) {
+  
+  if(k == NULL) {
+    printf("Error: `krx_ssl` in krx_ssl_encrypt is NULL.\n");
+    return -1;
+  }
+  if(out == NULL) {
+    printf("Error: `out` in krx_ssl_encrypt is NULL.\n");
+    return -2;
+  }
+  if(in == NULL) {
+    printf("Error: `in` in krx_ssl_encrypt is NULL.\n");
+    return -3;
+  }
+  if(max < 0) {
+    printf("Error: `max` in krx_ssl_encrypt is < 0.\n");
+    return -4;
+  }
+  if(len < 0) {
+    printf("Error: `len` in krx_ssl_encrypt is < 0.\n");
+    return -5;
+  }
+  
+  k->out_buf = out;
+  k->out_len = max; // not len? 
+  k->out_pos = 0; 
+  
+  int r = SSL_write(k->ssl, in, len);
+  if(r < 0) {
+    printf("Error: cannot encrypt.\n");
+    ERR_print_errors_fp(stderr);
+    return -6;
+  }
+
+  return r;
+}
+
+int krx_ssl_decrypt(krx_ssl* k, uint8_t* out, int max, uint8_t* in, int len) {
+
+  if(k == NULL) {
+    printf("Error: krx_ssl in krx_ssl_decrypt is NULL.\n");
+    return -1;
+  }
+  if(in == NULL) {
+    printf("Error: `in` in krx_ssl_decrypt is NULL.\n");
+    return -2;
+  }
+  if(out == NULL) {
+    printf("Error: `out` in krx_ssl_decrypt is NULL.\n");
+    return -3;
+  }
+  if(len < 1) {
+    printf("Error: `len` in krx_ssl_decrypt < 0. \n");
+    return -4;
+  }
+  if(max < 1) {
+    printf("Error: `max` in krx_ssl_decrypt < 0. \n");
+    return -5;
+  }
+
+  printf("krx_ssl_decrypt, max: %d, len: %d\n", max, len);
+
+  k->in_buf = in;
+  k->in_len = len;
+  k->in_pos = 0;
+
+  int r = SSL_read(k->ssl, out, max);
+  if(r < 0) {
+    printf("Error: cannot decrypt.\n");
+    ERR_print_errors_fp(stderr);
+    return -6;
+  }
+
+  return r;
+}
+
