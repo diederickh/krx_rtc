@@ -80,7 +80,38 @@ function krx_init() {
     pc_sender.createOffer(
       function(desc) {
         console.log("offer", desc.sdp);
-        sdp_input.value = desc.sdp
+
+        // send the password + change the UDP port of the first candidate
+        var changed_sdp = "";
+        var candidate_changed = false;
+        var lines = desc.sdp.split("\n");
+        for(var i = 0; i < lines.length; ++i) {
+          
+          // password
+          var line = lines[i].split("a=ice-pwd:");
+          if(line.length > 1 && line[1].length > 0) {
+            $.get("http://localhost:3333/?passwd=" +line[1], function(r) {
+              console.log("ice-pwd ok.\n");
+            });
+
+            changed_sdp += lines[i];
+            continue;
+          }
+
+          // change first candidate
+          line = lines[i].split("a=candidate:0");
+          if(line.length > 1 && line[1].length > 0 && candidate_changed == false) {
+            cparts = line[1].split(' ');
+            cparts[5] = "2233";
+            changed_sdp += "a=candidate:0" +cparts.join(" ");
+            candidate_changed = true;
+            continue;
+          }
+
+          changed_sdp += lines[i];
+        }
+
+        sdp_input.value = changed_sdp;
       },
       function(err) {
         console.log(err.message);
@@ -122,7 +153,8 @@ function krx_init() {
         //console.log(desc);
         var remote_changed_sdp = new window.RTCSessionDescription({type:"answer", sdp:input_sdp_val});
         //console.log("using");
-        //console.log(input_sdp_val);
+        console.log(input_sdp_val);
+        
         pc_sender.setRemoteDescription(remote_changed_sdp);
         //pc_sender.setRemoteDescription(desc);
         pc_receiver.setLocalDescription(desc);

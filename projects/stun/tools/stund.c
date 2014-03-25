@@ -78,7 +78,7 @@
 #endif
 
 /** Default port for STUN binding discovery */
-#define IPPORT_STUN  3478
+#define IPPORT_STUN  2233
 
 #include "stun/stunagent.h"
 #include "stund.h"

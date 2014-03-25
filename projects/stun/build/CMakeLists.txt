@@ -49,7 +49,12 @@ set(stun_headers
 
 add_library(stun ${stun_sources})
 
+add_executable(stund ${bd}/tools/stund.c)
+
+target_link_libraries(stund stun)
+
 set(CMAKE_INSTALL_PREFIX ${install_dir})
 
 install(TARGETS stun ARCHIVE DESTINATION lib)
+install(TARGETS stund DESTINATION bin)
 install(FILES ${stun_headers} DESTINATION include)

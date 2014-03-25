@@ -9,6 +9,7 @@
 #include <stun5389.h>
 
 #define KRX_UDP_BUF_LEN 512
+#define HTTPD_BUF_LEN 4096
 
 /*
 
@@ -17,19 +18,12 @@
          cd projects/html
          python -m SimpleHTTPServer
  
-         open http://localhost:8000/
-
-  2) Press the START button.
-
-  3) - Copy & Paste the a=ice-pwd:<COPY_THIS_VALUE>, into the "password" string  below in handle_stun().
-     - Execute the release.sh from the build script to kick off the udp-server with this password
-
-  4) In your browser change the port of the first ice-canditate to 2233
-  
-     e.g. from: a=candidate:0 1 UDP 2130379007 192.168.0.194 50318 typ host
-          to:   a=candidate:0 1 UDP 2130379007 192.168.0.194 2233 typ host
-     
+  2) Open http://localhost:8000/ in a browser
+  3) Execute this application (run ./release from the build dir.) 
+  4) Press the START button.
   5) Press the >> button
+  
+  Repeat 2-5 if you want to test new code.
 
  */
 
@@ -52,14 +46,29 @@ typedef struct {
   StunAgent agent;
   StunMessage request;
   StunMessage response;
+  char stun_pw[512] ;
+
 } udp_conn;
 
+/* accepting http requests for the password from the signaling */
+typedef struct {
+
+  /* networking */
+  int fd;
+  int port;
+  struct sockaddr_in saddr;
+  unsigned char buf[HTTPD_BUF_LEN];
+
+} httpd_conn;
+
+/* WebRTC */
 bool must_run = true;
 void krx_udp_sighandler(int num);
 int krx_udp_init(udp_conn* c);
 int krx_udp_bind(udp_conn* c);
 int krx_udp_receive(udp_conn* c);
 int krx_udp_send(udp_conn* c, uint8_t* buf, size_t len);
+
 void print_buffer(uint8_t *buf, size_t len);
 void print_stun_validation_status(StunValidationStatus s);
 void print_stun_class(StunClass c);
@@ -67,18 +76,36 @@ void print_stun_method(StunMethod m);
 void print_stun_message_return(StunMessageReturn r);
 int handle_stun(udp_conn* c, uint8_t *packet, size_t len); 
 
+/* Signaling */
+int krx_httpd_init(httpd_conn* c);
+void* krx_httpd_thread(void* c); /* c = httpd_conn */
+void krx_httpd_receive(void* c);
+
+/* Globals .. */
+httpd_conn* hcon_ptr = NULL;
+udp_conn* ucon_ptr = NULL;
+
 int main() {
   printf("udp.\n");
 
-  udp_conn con;
-  con.port = 58489;
-  con.port = 2233;
+  /* WebRTC */
+  udp_conn ucon;
+  ucon.port = 2233;
+  ucon_ptr = &ucon;
 
-  if(krx_udp_init(&con) < 0) {
+  /* HTTP for signaling */
+  httpd_conn hcon;
+  hcon_ptr = &hcon;
+  hcon.port = 3333;
+  if(krx_httpd_init(&hcon) < 0) {
     exit(EXIT_FAILURE);
   }
 
-  if(krx_udp_bind(&con) < 0) {
+  if(krx_udp_init(&ucon) < 0) {
+    exit(EXIT_FAILURE);
+  }
+
+  if(krx_udp_bind(&ucon) < 0) {
     exit(EXIT_FAILURE);
   }
 
@@ -86,9 +113,10 @@ int main() {
 
   while(must_run) {
     printf("..\n");
-    krx_udp_receive(&con);
+    krx_udp_receive(&ucon);
     sleep(1);
   }
+
 }
 
 
@@ -147,7 +175,7 @@ int handle_stun(udp_conn* c, uint8_t *packet, size_t len) {
   size_t output_size;
   uint8_t output[1024];
 
-  flags = STUN_AGENT_USAGE_IGNORE_CREDENTIALS; 
+  flags = STUN_AGENT_USAGE_IGNORE_CREDENTIALS; //  | STUN_AGENT_USAGE_USE_FINGERPRINT;  
 
   static const uint16_t attr[] = { 
     STUN_ATTRIBUTE_MAPPED_ADDRESS,
@@ -268,7 +296,7 @@ int handle_stun(udp_conn* c, uint8_t *packet, size_t len) {
 #endif
 
   // password
-  const char* password = "30efe3c2f9f3717a1edcb92d33742c7b";
+  const char* password = ucon_ptr->stun_pw; // "94ccca06d14fb48c135bdaff30560c4d";
   uint16_t password_len = strlen(password) + 1;
   output_size = stun_agent_finish_message(&agent, &response, (const uint8_t*) password, password_len);
 
@@ -291,9 +319,18 @@ int krx_udp_receive(udp_conn* c) {
 
   printf("Got some data:\n");
   print_buffer(c->buf, r);
-  handle_stun(c, c->buf, r);
 
+  if(r < 2) { 
+    printf("Only received 2 bytes?\n");
+    return 0;
+  }
 
+  if((c->buf[0] == 0x00 || c->buf[0] == 0x01) && (c->buf[1] == 0x00 || c->buf[1] == 0x01) ) {
+    handle_stun(c, c->buf, r);
+  }
+  else {
+    printf("No STUN: %02X %02X.\n", c->buf[0], c->buf[1]);
+  }
 
   return 0;
 }
@@ -355,4 +392,108 @@ void print_stun_message_return(StunMessageReturn r) {
     case STUN_MESSAGE_RETURN_UNSUPPORTED_ADDRESS: printf("StunMessageReturn: STUN_MESSAGE_RETURN_UNSUPPORTED_ADDRESS.\n"); break;
     default: printf("StunMessageReturn: unknown.\n"); break;
   }
+}
+
+/* HTTP */
+/* ----------------------------------------------------------------------------- */
+int krx_httpd_init(httpd_conn* c) {
+
+  c->fd = socket(AF_INET, SOCK_STREAM, 0);
+  if(c->fd < 0) {
+    printf("Error: cannot setup httpd listener.\n");
+    return -1;
+  }
+
+  /* reuse */
+  int val = 1;
+  int r = 0;
+  r = setsockopt(c->fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+  if(r < 0) {
+    printf("Error: cannot set REUSEADDR.\n");
+    return -2;
+  }
+
+  c->saddr.sin_family = AF_INET;
+  c->saddr.sin_addr.s_addr = INADDR_ANY;
+  c->saddr.sin_port = htons(c->port);
+
+  r = bind(c->fd, (struct sockaddr*)&c->saddr, sizeof(c->saddr));
+  if(r < 0) {
+    printf("Error: cannot bind the httpd socket.\n");
+    return -2;
+  }
+
+  printf("Initialize http listener.\n");
+
+  r = listen(c->fd, 5);
+  if(r < 0) {
+    printf("Error: cannot listen on the httpd socket.\n");
+    return -3;
+  }
+
+  krx_httpd_receive((void*)c);
+
+  return 0;
+}
+
+/*
+  Extracts the password get variable that it receives from the index.html (see projects).
+  We receive the ice-pwd value that we use in our stun response. 
+*/
+void krx_httpd_receive(void *c) {
+
+  httpd_conn* con = (httpd_conn*)c;
+  printf("httpd, start listening on: %d.\n", con->port);
+
+  bool run = true;
+
+  while(run) {
+
+    /* accept new connection */
+    struct sockaddr_in raddr;
+    socklen_t raddr_len = sizeof(raddr);
+    int fd = accept(con->fd, (struct sockaddr*) &raddr, &raddr_len);
+    if(fd < 0) {
+      printf("Error: while accepting on httpd.\n");
+      exit(EXIT_FAILURE);
+    }
+    
+    int nread = read(fd, con->buf, HTTPD_BUF_LEN);
+    unsigned char* b = con->buf;
+
+    for(int i = 0; i < nread; ++i) {
+
+      /* extract the passwd variable: /?passwd=[THE PASSWORD] */
+      if(b[i+0] == 'G' && b[i+1] == 'E' && b[i+2] == 'T' && nread > 100) {
+        bool must_copy = false;
+        int copy_pos = 0;
+
+        for(int j = i; j < nread; ++j) {
+
+          if(b[j] == '=') {
+            must_copy = true;
+            continue;
+          }
+
+          if(must_copy && b[j] == ' ') {
+            printf("Got password: '%s'\n", ucon_ptr->stun_pw);
+            run = false;
+            must_copy = false;
+
+            close(fd);
+            fd = -1;
+            break;
+          }
+
+          if(must_copy) {
+            ucon_ptr->stun_pw[copy_pos++] = b[j];
+          }
+        }
+      }
+    }
+  }
+
+  close(con->fd);
+
+  printf("Closed httpd socket.\n");
 }
