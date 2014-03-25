@@ -11,6 +11,7 @@ cmake --build . --target install
 if [ "$(uname)" == "Darwin" ] ; then 
     cd ./../../../../install/mac-clang-x86_64/bin/
     ./udp_server
+    #./ssl_test
 else
     cd ./../../../../install/linux-gcc-x86_64/bin/
     ./udp_server

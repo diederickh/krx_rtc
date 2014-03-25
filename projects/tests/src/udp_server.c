@@ -8,12 +8,18 @@
 #include <unistd.h>
 #include <stun5389.h>
 
+#include <openssl/err.h>
+#include <openssl/dh.h>
+#include <openssl/ssl.h>
+#include <openssl/conf.h>
+#include <openssl/engine.h>
+
 #define KRX_UDP_BUF_LEN 512
 #define HTTPD_BUF_LEN 4096
 
 /*
 
-  1)  Open index.html in your browser (e.g. start local webserver: 
+  1)  Open index.html in your browser (e.g. start local webserver) 
 
          cd projects/html
          python -m SimpleHTTPServer
@@ -25,7 +31,23 @@
   
   Repeat 2-5 if you want to test new code.
 
+  -- 
+
+  Create server/client self-signed certificate/key:
+
+    openssl req -x509 -newkey rsa:2048 -days 3650 -nodes -keyout client-key.pem -out client-cert.pem
+    openssl req -x509 -newkey rsa:2048 -days 3650 -nodes -keyout server-key.pem -out server-cert.pem
+
+
  */
+
+typedef struct {
+  SSL* ssl;
+  SSL_CTX* ctx;
+  X509* client_cert;
+  BIO* in;
+  BIO* out;
+} krx_ssl;
 
 typedef struct {
 
@@ -47,6 +69,9 @@ typedef struct {
   StunMessage request;
   StunMessage response;
   char stun_pw[512] ;
+
+  /* ssl */
+  krx_ssl ssl;
 
 } udp_conn;
 
@@ -78,8 +103,30 @@ int handle_stun(udp_conn* c, uint8_t *packet, size_t len);
 
 /* Signaling */
 int krx_httpd_init(httpd_conn* c);
-void* krx_httpd_thread(void* c); /* c = httpd_conn */
-void krx_httpd_receive(void* c);
+void krx_httpd_receive(httpd_conn* c);
+
+/* SSL<>DTLS */
+int krx_ssl_init(krx_ssl* k);
+int krx_ssl_conn_init(krx_ssl* k);
+int krx_ssl_bio_create(BIO* b);
+int krx_ssl_bio_destroy(BIO* b);
+int krx_ssl_bio_read(BIO* b, char* buf, int len);
+int krx_ssl_bio_write(BIO* b, const char* buf, int len);
+long krx_ssl_bio_ctrl(BIO* b, int cmd, long num, void* ptr);
+
+static struct bio_method_st krx_bio = {
+  BIO_TYPE_SOURCE_SINK,
+  "krx_bio",
+  krx_ssl_bio_write,
+  krx_ssl_bio_read,
+  0,
+  0,
+  krx_ssl_bio_ctrl,
+  krx_ssl_bio_create,
+  krx_ssl_bio_destroy,
+  0
+};
+
 
 /* Globals .. */
 httpd_conn* hcon_ptr = NULL;
@@ -92,6 +139,11 @@ int main() {
   udp_conn ucon;
   ucon.port = 2233;
   ucon_ptr = &ucon;
+
+  /* SSL */
+  if(krx_ssl_init(&ucon.ssl) < 0) {
+    exit(EXIT_FAILURE);
+  }
 
   /* HTTP for signaling */
   httpd_conn hcon;
@@ -116,9 +168,7 @@ int main() {
     krx_udp_receive(&ucon);
     sleep(1);
   }
-
 }
-
 
 void krx_udp_sighandler(int signum) {
   printf("Verbose: handled sig.\n");
@@ -440,9 +490,9 @@ int krx_httpd_init(httpd_conn* c) {
   Extracts the password get variable that it receives from the index.html (see projects).
   We receive the ice-pwd value that we use in our stun response. 
 */
-void krx_httpd_receive(void *c) {
+void krx_httpd_receive(httpd_conn *c) {
 
-  httpd_conn* con = (httpd_conn*)c;
+  httpd_conn* con = c;
   printf("httpd, start listening on: %d.\n", con->port);
 
   bool run = true;
@@ -461,7 +511,7 @@ void krx_httpd_receive(void *c) {
     int nread = read(fd, con->buf, HTTPD_BUF_LEN);
     unsigned char* b = con->buf;
 
-    for(int i = 0; i < nread; ++i) {
+    for(int i = 0; i < nread - 3; ++i) {
 
       /* extract the passwd variable: /?passwd=[THE PASSWORD] */
       if(b[i+0] == 'G' && b[i+1] == 'E' && b[i+2] == 'T' && nread > 100) {
@@ -496,4 +546,148 @@ void krx_httpd_receive(void *c) {
   close(con->fd);
 
   printf("Closed httpd socket.\n");
+}
+
+/* S S L // D T L S */
+/* -------------------------------------------------------------------------------- */
+
+int krx_ssl_init(krx_ssl* k) {
+
+  int r = 0;
+
+  SSL_library_init();
+  SSL_load_error_strings();
+  ERR_load_BIO_strings();
+  OpenSSL_add_all_algorithms();
+  
+  /* create a new context using DTLS */
+  k->ctx = SSL_CTX_new(DTLSv1_method());
+  if(!k->ctx) {
+    printf("Error: cannot create SSL_CTX.\n");
+    ERR_print_errors_fp(stderr);
+    return -1;
+  }
+
+  /* set our supported ciphers */
+  r = SSL_CTX_set_cipher_list(k->ctx, "ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH");
+  if(r <= 0) {
+    printf("Error: cannot set the cipher list.\n");
+    ERR_print_errors_fp(stderr);
+    return -2;
+  }
+
+  /* the client doesn't have to send it's certificate */
+  SSL_CTX_set_verify(k->ctx, SSL_VERIFY_NONE, NULL);
+
+  /* enable srtp */
+  r = SSL_CTX_set_tlsext_use_srtp(k->ctx, "SRTP_AES128_CM_SHA1_80");
+  if(r != 0) {
+    printf("Error: cannot setup srtp.\n");
+    ERR_print_errors_fp(stderr);
+    return -3;
+  }
+
+  /* load certificate and key */
+  r = SSL_CTX_use_certificate_file(k->ctx, "./server-cert.pem", SSL_FILETYPE_PEM);
+  if(r <= 0) {
+    printf("Error: cannot load certificate file.\n");
+    ERR_print_errors_fp(stderr);
+    return -4;
+  }
+
+  r = SSL_CTX_use_PrivateKey_file(k->ctx, "./server-key.pem", SSL_FILETYPE_PEM);
+  if(r <= 0) {
+    printf("Error: cannot load private key file.\n");
+    ERR_print_errors_fp(stderr);
+    return -5;
+  }
+
+  return 0;
+}
+
+int krx_ssl_bio_create(BIO* b) {
+  b->init = 1;
+  b->num = 0;
+  b->ptr = NULL;
+  b->flags = 0;
+  return 1;
+}
+
+int krx_ssl_bio_destroy(BIO* b) {
+  if(b == NULL) {
+    return 0;
+  }
+  
+  b->ptr = NULL;
+  b->init = 0;
+  b->flags = 0;
+  
+  return 1;
+}
+
+int krx_ssl_bio_read(BIO* b, char* buf, int len) {
+  printf("DTLS: bio read called with %d bytes.\n", len);
+  return 0;
+}
+
+int krx_ssl_bio_write(BIO* b, const char* buf, int len) {
+  printf("DTLS: bio write called with %d bytes.\n", len);
+  return 0;
+}
+
+long krx_ssl_bio_ctrl(BIO* b, int cmd, long num, void* ptr) {
+
+  switch (cmd) {
+    case BIO_CTRL_FLUSH: {
+      printf("DTLS: BIO_CTRL_FLUSH.\n");
+      return 1;
+    } 
+    case BIO_CTRL_WPENDING: {
+      printf("DTLS: BIO_CTRL_WPENDING: %ld.\n", num);
+      return 0;
+    }
+    case BIO_CTRL_DGRAM_QUERY_MTU: {
+      return 1472;
+    }
+    case BIO_CTRL_GET: {
+      return BIO_TYPE_SOURCE_SINK;
+    }
+    default: {
+      printf("DTLS: unhandled bio_ctrl: %d num: %ld\n", cmd, num);
+      break;
+    }
+  }
+
+  return 0;
+}
+
+/* initialize a new connection; @todo cleanup + free on failure */
+int krx_ssl_conn_init(krx_ssl* k) {
+
+  k->ssl = SSL_new(k->ctx);
+  if(k->ssl == NULL) {
+    printf("Error: cannot create the SSL object.\n");
+    ERR_print_errors_fp(stderr);
+    return -1;
+  }
+
+  k->in = BIO_new(&krx_bio);
+  if(k->in == NULL) {
+    printf("Error: cannot create the in BIO.\n");
+    SSL_free(k->ssl);
+    return -2;
+  }
+
+  k->out = BIO_new(&krx_bio);
+  if(k->out == NULL) {
+    BIO_free(k->in);
+    SSL_free(k->ssl);
+    return -3;
+  }
+
+  k->in->ptr = k;
+  k->out->ptr = k;
+
+  SSL_set_bio(k->ssl, k->in, k->out);
+  return 0;
 }
