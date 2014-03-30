@@ -16,6 +16,7 @@ add_definitions(-DENABLE_DEBUGGING)
 add_executable(udp_server 
   ${bd}/../src/udp_server.c
   ${bd}/../src/krx_dtls.c
+  ${bd}/../src/krx_rtp.c
 )
 
 add_executable(udp_client ${bd}/../src/udp_client.cpp)

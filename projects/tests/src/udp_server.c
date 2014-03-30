@@ -44,6 +44,7 @@
 #include <openssl/engine.h>
 
 #include "krx_dtls.h"
+#include "krx_rtp.h"
 #include <srtp.h>
 
 #define KRX_UDP_BUF_LEN 4096
@@ -108,10 +109,12 @@ typedef struct {
   /* ssl */
   krx_ssl ssl;
   
-  /* srtp */
+  /* srtp + rtp */
   krx_srtp srtp;
 
+
   krx_dtls_t dtls;
+  krx_rtp_t rtp;
 
 } udp_conn;
 
@@ -195,6 +198,10 @@ int main() {
   }
 
   if(krx_dtls_create(&ucon.dtls) < 0) {
+    exit(EXIT_FAILURE);
+  }
+
+  if(krx_rtp_init(&ucon.rtp) < 0) {
     exit(EXIT_FAILURE);
   }
 
@@ -493,7 +500,6 @@ int krx_udp_receive(udp_conn* c) {
 
       }
       else if(c->state == KRX_STATE_SSL_INIT_READY) {
-        printf("> lets unprotect: %d\n", r);
         int buflen = r;
         err_status_t sr = srtp_unprotect(c->srtp.session, c->buf, &buflen);
         
@@ -501,7 +507,7 @@ int krx_udp_receive(udp_conn* c) {
           printf("Error: cannot unprotect, err: %d. len: %d <> %d\n", sr, len, buflen);
         }
         else {
-          printf("YES!\n");
+          krx_rtp_decode(&c->rtp, c->buf, buflen);
         }
 
       }
