@@ -1,21 +1,3 @@
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <signal.h>
-#include <unistd.h>
-#include <stun5389.h>
-
-#include <openssl/err.h>
-#include <openssl/dh.h>
-#include <openssl/ssl.h>
-#include <openssl/conf.h>
-#include <openssl/engine.h>
-
-#define KRX_UDP_BUF_LEN 512
-#define HTTPD_BUF_LEN 4096
 
 /*
 
@@ -39,18 +21,43 @@
     openssl req -x509 -newkey rsa:2048 -days 3650 -nodes -keyout server-key.pem -out server-cert.pem
 
 
+  References:
+  -----------
+  - Old version of this file: https://gist.github.com/roxlu/aaef70ee7954e41c8b3e
+
  */
 
-/* SSL debug */
-#define SSL_WHERE_INFO(ssl, w, flag, msg) {         \
-    if(w & flag) {                                  \
-      printf("----- ");                             \
-      printf(msg);                                  \
-      printf(" - %s ", SSL_state_string_long(ssl)); \
-      printf(" - %s ", SSL_state_string(ssl));      \
-      printf("\n");                                 \
-    }                                               \
-  } 
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <unistd.h>
+#include <stun5389.h>
+
+#include <openssl/err.h>
+#include <openssl/dh.h>
+#include <openssl/ssl.h>
+#include <openssl/conf.h>
+#include <openssl/engine.h>
+
+#include "krx_dtls.h"
+#include <srtp.h>
+
+#define KRX_UDP_BUF_LEN 4096
+#define HTTPD_BUF_LEN 4096
+
+/* See RFC 3711 - see strp.h*/
+#define KRX_SRTP_MASTER_KEY_LEN 16
+#define KRX_SRTP_MASTER_SALT_LEN 14
+#define KRX_SRTP_MASTER_LEN (KRX_SRTP_MASTER_KEY_LEN + KRX_SRTP_MASTER_SALT_LEN)
+
+enum {
+  KRX_STATE_NONE,
+  KRX_STATE_SSL_INIT_READY
+};
 
 typedef struct {
   SSL* ssl;
@@ -69,6 +76,15 @@ typedef struct {
 } krx_ssl;
 
 typedef struct {
+  srtp_t session;
+  srtp_stream_t stream;
+  srtp_policy_t policy;
+} krx_srtp;
+
+typedef struct {
+
+  /* general */
+  int state; /* just a tiny helper we use for this experimental code to keep track of state */
 
   /* initial networking */
   int sock;
@@ -91,6 +107,11 @@ typedef struct {
 
   /* ssl */
   krx_ssl ssl;
+  
+  /* srtp */
+  krx_srtp srtp;
+
+  krx_dtls_t dtls;
 
 } udp_conn;
 
@@ -133,9 +154,16 @@ int krx_ssl_bio_destroy(BIO* b);
 int krx_ssl_bio_read(BIO* b, char* buf, int len);
 int krx_ssl_bio_write(BIO* b, const char* buf, int len);
 long krx_ssl_bio_ctrl(BIO* b, int cmd, long num, void* ptr);
-
+int krx_ssl_verify(int ok, X509_STORE_CTX* ctx);
+int krx_ssl_print_fingerprint(krx_ssl* k);
 int krx_ssl_encrypt(krx_ssl* k, uint8_t* out, int max, uint8_t* in, int len);
 int krx_ssl_decrypt(krx_ssl* k, uint8_t* out, int max, uint8_t* in, int len);
+
+/* SRTP */
+int krx_init_srtp(krx_srtp* s);
+
+/* KRX_DTLS (experimental) */
+int krx_send_to_browser(krx_dtls_t* k, uint8_t* data, int len);
 
 static struct bio_method_st krx_bio = {
   BIO_TYPE_SOURCE_SINK,
@@ -157,16 +185,31 @@ udp_conn* ucon_ptr = NULL;
 
 int main() {
   printf("udp.\n");
+  udp_conn ucon;
+  ucon.dtls.user = &ucon;
+  ucon.dtls.type = KRX_DTLS_TYPE_SERVER;
+  ucon.dtls.send = krx_send_to_browser;
+
+  if(krx_dtls_init() < 0) {
+    exit(EXIT_FAILURE);
+  }
+
+  if(krx_dtls_create(&ucon.dtls) < 0) {
+    exit(EXIT_FAILURE);
+  }
 
   /* WebRTC */
-  udp_conn ucon;
   ucon.port = 2233;
   ucon.ssl.user = &ucon;
   ucon_ptr = &ucon;
-
-
+  
   /* SSL */
   if(krx_ssl_init(&ucon.ssl) < 0) {
+    exit(EXIT_FAILURE);
+  }
+
+  /* SRTP */
+  if(krx_init_srtp(&ucon.srtp) < 0) {
     exit(EXIT_FAILURE);
   }
 
@@ -189,10 +232,12 @@ int main() {
   signal(SIGINT, krx_udp_sighandler);
 
   while(must_run) {
-    printf("..\n");
+    //printf("..\n");
     krx_udp_receive(&ucon);
-    sleep(1);
+    //sleep(1);
   }
+
+  krx_dtls_shutdown();
 }
 
 void krx_udp_sighandler(int signum) {
@@ -213,6 +258,8 @@ int krx_udp_init(udp_conn* c) {
   c->saddr.sin_family = AF_INET;
   c->saddr.sin_addr.s_addr = htonl(INADDR_ANY);
   c->saddr.sin_port = htons(c->port);
+
+  c->state = KRX_STATE_NONE;
 
   return 1;
 }
@@ -391,10 +438,6 @@ int krx_udp_receive(udp_conn* c) {
     printf("Error: cannot receive.\n");
     return -1;
   }
-
-  printf("Got some data:\n");
-  print_buffer(c->buf, r);
-
   if(r < 2) { 
     printf("Only received 2 bytes?\n");
     return 0;
@@ -404,42 +447,70 @@ int krx_udp_receive(udp_conn* c) {
     handle_stun(c, c->buf, r);
   }
   else {
+    if(krx_dtls_is_handshake_done(&c->dtls) > 0) {
+      if(c->state == KRX_STATE_NONE) {
+        // when done, we pass on the data libsrtp
 
-    printf("No STUN: %02X %02X.\n", c->buf[0], c->buf[1]);
+        c->state = KRX_STATE_SSL_INIT_READY;
+        printf("---------------------- finished --------------------------\n");
+        uint8_t material[KRX_SRTP_MASTER_LEN * 2];
+        int r = SSL_export_keying_material(c->dtls.ssl, material, KRX_SRTP_MASTER_LEN * 2, 
+                                           "EXTRACTOR-dtls_srtp", 19, NULL, 0, 0);
 
-    /* initialize SSL connection */
-    if(!c->ssl.conn_initialized) {
-      if(krx_ssl_conn_init(&c->ssl) < 0) {
-        exit(EXIT_FAILURE);
+        if(r == 0) {
+          printf("Error: cannot export the SSL keying material.\n");
+          exit(EXIT_FAILURE);
+        }
+        
+        // extracking keying example https://github.com/traviscross/baresip/blob/8974d662c942b10a9bb05223ddc7881896dd4c2f/modules/dtls_srtp/tls_udp.c
+        /* Keys:: http://tools.ietf.org/html/rfc5764#section-4.2, note: client <> server use different keying, we handle server for now. */
+        uint8_t* remote_key = material;
+        uint8_t* local_key = remote_key + KRX_SRTP_MASTER_KEY_LEN;
+        uint8_t* remote_salt = local_key + KRX_SRTP_MASTER_KEY_LEN;
+        uint8_t* local_salt = remote_salt + KRX_SRTP_MASTER_SALT_LEN;;
+
+        memcpy(c->srtp.policy.key, remote_key, KRX_SRTP_MASTER_KEY_LEN);
+        memcpy(c->srtp.policy.key + KRX_SRTP_MASTER_KEY_LEN, remote_salt, KRX_SRTP_MASTER_SALT_LEN);
+
+        SRTP_PROTECTION_PROFILE *p = SSL_get_selected_srtp_profile(c->dtls.ssl);
+        if(!p) {
+          printf("Error: cannot extract the srtp_profile.\n");
+          exit(EXIT_FAILURE);
+        }
+        printf(">>>>>>> %s <<<<<\n", p->name);
+
+        // TLS_RSA_WITH_AES_128_CBC_SHA 
+        printf("---> cipher: %s\n", SSL_CIPHER_get_name(SSL_get_current_cipher(c->dtls.ssl)));
+
+        printf("one\n");
+        /* create SRTP session */
+        err_status_t sr = srtp_create(&c->srtp.session, &c->srtp.policy);
+        if(sr != err_status_ok) {
+          printf("Error: cannot create srtp session: %d.\n", sr);
+          exit(EXIT_FAILURE);
+        }
+        printf("two\n"); 
+
       }
+      else if(c->state == KRX_STATE_SSL_INIT_READY) {
+        printf("> lets unprotect: %d\n", r);
+        int buflen = r;
+        err_status_t sr = srtp_unprotect(c->srtp.session, c->buf, &buflen);
+        
+        if(sr != err_status_ok) {
+          printf("Error: cannot unprotect, err: %d. len: %d <> %d\n", sr, len, buflen);
+        }
+        else {
+          printf("YES!\n");
+        }
+
+      }
+      
     }
     else {
-      printf("SSL connection is initialized.\n");
-    }
-
-    /* write SSL */
-    if(c->ssl.conn_initialized) {
-      printf("Writing...\n");
-
-      /* TMP */
-      uint8_t send_buf[4096 * 10];
-      c->ssl.out_buf = send_buf;
-      c->ssl.out_len = 4096 * 10;
-      /* TMP */
-
-      uint8_t tmp_buf[4096];
-      int er = krx_ssl_decrypt(&c->ssl, tmp_buf, 4096, c->buf, r);
-      if(er < 0) {
-        printf("Error: krx_ssl_decrypt failed.\n");
-      }
-
-      
-      if(c->ssl.out_pos > 0) {
-        printf("-- Outbuffer: out_len: %d, out_pos: %d\n", c->ssl.out_len, c->ssl.out_pos);
-      }
+      krx_dtls_handle_traffic(&c->dtls, c->buf, r);
     }
   }
-
   return 0;
 }
 
@@ -448,7 +519,7 @@ int krx_udp_send(udp_conn* c, uint8_t* buf, size_t len) {
   int r = sendto(c->sock, buf, len, 0, (struct sockaddr*)&c->client, sizeof(c->client));
   printf("Sending data on connection: %d, sock: %d\n", r, c->sock);
 
-  return 0;
+  return r;
 }
 
 void print_stun_validation_status(StunValidationStatus s) {
@@ -627,7 +698,11 @@ int krx_ssl_init(krx_ssl* k) {
   }
 
   /* set our supported ciphers */
-  r = SSL_CTX_set_cipher_list(k->ctx, "ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH");
+
+  //r = SSL_CTX_set_cipher_list(k->ctx, "DHE-RSA-AES128-GCM-SHA:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256");
+  //r = SSL_CTX_set_cipher_list(k->ctx, "ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH");
+  //r = SSL_CTX_set_cipher_list(k->ctx, "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA");
+  r = SSL_CTX_set_cipher_list(k->ctx, "RSA:kDHE");
   if(r <= 0) {
     printf("Error: cannot set the cipher list.\n");
     ERR_print_errors_fp(stderr);
@@ -635,7 +710,10 @@ int krx_ssl_init(krx_ssl* k) {
   }
 
   /* the client doesn't have to send it's certificate */
-  SSL_CTX_set_verify(k->ctx, SSL_VERIFY_NONE, NULL);
+  SSL_CTX_set_verify(k->ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, krx_ssl_verify);
+  //SSL_CTX_set_session_cache_mode(k->ctx, SSL_SESS_CACHE_OFF);
+  //SSL_CTX_set_verify_depth(k->ctx, 4);
+  SSL_CTX_set_mode(k->ctx, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_AUTO_RETRY);
 
   /* enable srtp */
   r = SSL_CTX_set_tlsext_use_srtp(k->ctx, "SRTP_AES128_CM_SHA1_80");
@@ -660,7 +738,19 @@ int krx_ssl_init(krx_ssl* k) {
     return -5;
   }
 
+  r = SSL_CTX_check_private_key(k->ctx);
+  if(r == 0) {
+    printf("Error: checking the private key failed.\n");
+    return -6;
+  }
+
   k->conn_initialized = false; 
+  k->in_pos = 0;
+  k->in_len = 0;
+  k->in_buf = NULL;
+  k->out_pos = 0;
+  k->out_len = 0;
+  k->out_buf = NULL;
 
   return 0;
 }
@@ -731,12 +821,12 @@ int krx_ssl_bio_write(BIO* b, const char* buf, int len) {
     w = avail;
   }
   else {
-    w = avail;
+    w = len;
   }
 
   memcpy(krx->out_buf + krx->out_pos, buf, w);
   krx->out_pos += w;
-  printf("OUT_POS: %d\n", krx->out_pos);
+
   return w;
 }
 
@@ -916,3 +1006,90 @@ int krx_ssl_decrypt(krx_ssl* k, uint8_t* out, int max, uint8_t* in, int len) {
   return r;
 }
 
+int krx_ssl_verify(int ok, X509_STORE_CTX* ctx) {
+  printf("krx_ssl_verify: ok: %d\n", ok);
+  return 1;
+}
+
+// @todo(roxlu):  implement
+int krx_ssl_print_fingerprint(krx_ssl* k) {
+
+  uint8_t fp[4096] = { 0 } ;
+  uint8_t fp_string[4096] = { 0 };
+  uint32_t fp_len = 4096;
+  int r = 0;
+
+  /*
+  ret = X509_digest(cert, EVP_sha256(), fingerprint, &fingerprint_len);
+  if (ret != 1) {
+    printke("X509_digest");
+    exit(1);
+  }
+  for (i = 0; i < fingerprint_len; i++) {
+    if (i > 0) {
+      pos += snprintf(fingerprint_string + pos, TEST_SZ - pos, ":");
+    }
+    pos += snprintf(fingerprint_string + pos, TEST_SZ - pos, "%02X", fingerprint[i]);
+  }
+  printk("%s", str);
+  printk("a=fingerprint:sha-256 %s", fingerprint_string);
+   */
+  
+  
+
+  return 0;
+}
+
+/* S R T P */
+/* -------------------------------------------------------------------------------- */
+
+int krx_init_srtp(krx_srtp* s) {
+  printf("Setting up srtp.\n");
+  
+  /* initialize */
+  err_status_t err = err_status_ok;
+  err = srtp_init();
+  if(err != err_status_ok) {
+    printf("error, code: %d\n", err);
+    return -1;
+  }
+  // see http://mxr.mozilla.org/mozilla-central/source/media/webrtc/signaling/src/mediapipeline/SrtpFlow.cpp
+  //crypto_policy_set_rtp_default(&s->policy.rtp);
+  //crypto_policy_set_rtcp_default(&s->policy.rtcp);
+  crypto_policy_set_aes_cm_128_hmac_sha1_80(&s->policy.rtp); // see SSL_get_selected_srtp_profile() to extract the name
+  crypto_policy_set_aes_cm_128_hmac_sha1_80(&s->policy.rtcp); 
+
+  s->policy.ssrc.type = ssrc_any_inbound; 
+  s->policy.key = calloc(1, KRX_SRTP_MASTER_LEN); // @todo(roxlu): make sure to free somewhere
+  s->policy.window_size = 1024;  // see: http://mxr.mozilla.org/mozilla-central/source/media/webrtc/signaling/src/mediapipeline/SrtpFlow.cpp
+  s->policy.allow_repeat_tx = 1; // see:  http://mxr.mozilla.org/mozilla-central/source/media/webrtc/signaling/src/mediapipeline/SrtpFlow.cpp
+  s->policy.window_size = 128;  // see: http://mxr.mozilla.org/mozilla-central/source/media/webrtc/signaling/src/mediapipeline/SrtpFlow.cpp
+  s->policy.allow_repeat_tx = 0; // see:  http://mxr.mozilla.org/mozilla-central/source/media/webrtc/signaling/src/mediapipeline/SrtpFlow.cpp
+
+  s->policy.next = NULL;
+
+
+  /*
+policy.ssrc.type = inbound ? ssrc_any_inbound : ssrc_any_outbound;
+77   policy.ssrc.value = 0;
+78   policy.ekt = nullptr;
+79   policy.window_size = 1024;   // Use the Chrome value.  Needs to be revisited.  Default is 128
+80   policy.allow_repeat_tx = 1;  // Use Chrome value; needed for NACK mode to work
+81   policy.next = nullptr;
+   */
+  
+  if(s->policy.key == NULL) {
+    printf("Error: cannot allocate the policy key.\n");
+    return -1;
+  }
+
+  return 0;
+}
+
+/* K R X _ D T L S */
+/* -------------------------------------------------------------------------------- */
+int krx_send_to_browser(krx_dtls_t* k, uint8_t* data, int len) {
+  printf("Must send something to browser: %d\n", len);
+  udp_conn* c = (udp_conn*)k->user;
+  return krx_udp_send(c, data, len);
+}

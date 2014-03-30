@@ -108,6 +108,15 @@ function krx_init() {
             continue;
           }
 
+          // change finger print to our certificates one
+          line = lines[i].split('a=fingerprint:');
+          if(line.length > 1 && line[1].length > 0) {
+            var my_fp = "a=fingerprint:sha-256 3E:4F:43:C0:5E:70:3B:9A:33:75:50:03:5E:49:12:A4:C8:A8:E6:E1:56:27:E7:40:2B:D3:F1:D6:7E:A7:39:23\n";
+            console.log("my:", my_fp);
+            changed_sdp += my_fp;
+            continue;
+          }
+
           changed_sdp += lines[i];
         }
 
