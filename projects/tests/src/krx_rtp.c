@@ -34,10 +34,12 @@ int krx_rtp_decode(krx_rtp_t* k, uint8_t* buf, int len) {
 
   // @todo(roxlu): handle csrc_count > 0
   if(k->csrc_count != 0) {
-    printf("Error: we're only handling a simple rtp packet now. none with csrc_count > 0.\n");
+    printf("Error: we're only handling a simple rtp packet now. none with csrc_count > 0 (got: %d).\n", k->csrc_count);
     exit(EXIT_FAILURE);
   }
 
+#if 1
+  printf("-\n");
   printf("Version: %d\n", k->version);
   printf("Padding: %d\n", k->padding);
   printf("Extension: %d\n", k->extension);
@@ -47,49 +49,71 @@ int krx_rtp_decode(krx_rtp_t* k, uint8_t* buf, int len) {
   printf("Sequence number: %d\n", k->sequence_number);
   printf("Timestamp: %u\n", k->timestamp);
   printf("SSRC: %u\n", k->ssrc);
+#endif
 
   /* VP8 */
-  krx_rtp_decode_vp8(&k->vp8, buf+12, (len - 12));
+  int r = krx_rtp_decode_vp8(&k->vp8, buf+12, (len - 12));
+  if(r < 0) {
+    return -4;
+  }
 
-  printf("-\n");
-  return len;
+  return (12 + r); // 12 basic header.
 }
 
 int krx_rtp_decode_vp8(krx_rtp_vp8_t* v, uint8_t* buf, int len) {
 
-  if(len < 1) {
+  if(len < 6) {
     printf("Error: krx_rtp_decode_vp8(), cannot decode; which should have at least one byte.\n");
     return -1;
   }
 
   int pos = 0;
-
+  /*
   v->extended_control = (buf[pos] & 0x80) >> 7;
   v->non_reference_frame = (buf[pos] & 0x20) >> 5;
   v->start_of_vp8 = (buf[pos] & 0x10) >> 4;
   v->partition_index = (buf[pos] & 0x07);
+  */
 
+  v->X = (buf[pos] & 0x80) >> 7;
+  v->N = (buf[pos] & 0x20) >> 5;
+  v->S = (buf[pos] & 0x10) >> 4;
+  v->PID = (buf[pos] & 0x07);
+
+  /*
   v->picture_id_present = 0;
   v->pic_idx_present = 0;
   v->tid_present = 0;
   v->key_idx_present = 0;
   v->picture_id = 0;
+  */
+  v->I = 0;
+  v->L = 0;
+  v->K = 0;
+  v->PictureID = 0;
+  v->TL0PICIDX = 0;
 
   pos = 1;
 
-  if(v->extended_control == 1) {
+  if(v->X == 1) {
+    /*
     v->picture_id_present = (buf[pos] & 0x80) >> 7;
     v->pic_idx_present = (buf[pos] & 0x40) >> 6;
     v->tid_present = (buf[pos] & 0x20) >> 5;
     v->key_idx_present = (buf[pos] & 0x10) >> 4;
+    */
+    v->I = (buf[pos] & 0x80) >> 7;
+    v->L = (buf[pos] & 0x40) >> 6;
+    v->T = (buf[pos] & 0x20) >> 5;
+    v->K = (buf[pos] & 0x10) >> 4;
   }
 
-  if(v->picture_id_present) {
+  if(v->I == 1) {
 
     pos = 2;
 
     uint8_t ext_flag = (buf[pos] & 0x80) >> 7;
-    uint8_t* dest_ptr = (uint8_t*)&v->picture_id;
+    uint8_t* dest_ptr = (uint8_t*)&v->PictureID;
     if(ext_flag == 1) {
       dest_ptr[0] = buf[pos + 1];
       dest_ptr[1] = (buf[pos] & 0x80);
@@ -103,37 +127,48 @@ int krx_rtp_decode_vp8(krx_rtp_vp8_t* v, uint8_t* buf, int len) {
   }
 
   // @todo(roxlu): we only implement a very basic vp8 decoder:
-  if(v->tid_present == 1) {
+  if(v->T == 1) {
     printf("Error: krx_rtp_decode_vp8(), not handling tid_present yet.\n");
     return -3;
   }
-  if(v->key_idx_present == 1) {
+  if(v->K == 1) {
     printf("Error: krx_rtp_decode_vp8(), not handling key_idx_present yet.\n");
     return -4;
   }
 
-  printf("vp8 Extended Control: %d\n", v->extended_control);
-  printf("vp8 Non Reference Frame: %d\n", v->non_reference_frame);
-  printf("vp8 Start of VP8 payload: %d\n", v->start_of_vp8);
-  printf("vp8 Partition Index: %d\n", v->partition_index);
-  printf("vp8 Picture ID Present: %d\n", v->picture_id_present);
-  printf("vp8 Pic IDX Present: %d\n", v->pic_idx_present);
-  printf("vp8 TID Present: %d\n", v->tid_present);
-  printf("vp8 Key IDX Present: %d\n", v->key_idx_present);
-  printf("vp8 Picture ID: %u\n", v->picture_id);
-
+#if 1
+  printf("vp8 Extended Control: %d\n", v->X);
+  printf("vp8 Non Reference Frame: %d\n", v->N);
+  printf("vp8 Start of VP8 payload: %d\n", v->S);
+  printf("vp8 Partition Index: %d\n", v->PID);
+  printf("vp8 Picture ID Present: %d\n", v->I);
+  printf("vp8 Pic IDX Present (TL0PICIDX): %d\n", v->L);
+  printf("vp8 TID Present: %d\n", v->T);
+  printf("vp8 Key IDX Present: %d\n", v->K);
+  printf("vp8 Picture ID: %u\n", v->PictureID);
+#endif
 
   /* VP8 Payload Header */
-  if(v->start_of_vp8 == 1 && v->partition_index == 0) {
-    printf("======= VP8 Payload Header =======\n");
+  printf("--\n");
+  if(v->S == 1 && v->PID == 0) {
+    printf("++ \n");
+    //printf("======= VP8 Payload Header =======\n");
     uint8_t size0 = (buf[pos] & 0xE0) >> 3;
     uint8_t size1 = buf[pos + 1];
     uint8_t size2 = buf[pos + 2];
-    int nbytes = size0 + 8 * size1 + 2048 * size2;
-    printf("vp8 size0: %d, size1: %d, size2: %d, nbytes: %d, len: %d\n", size0, size1, size2, nbytes, len);
+    int nbytes = (size0) + (8 * size1) + (2048 * size2);
+    printf("vp8 size0: %d, size1: %d, size2: %d, number of bytes for this frame: %d, len: %d\n", size0, size1, size2, nbytes, len);
+
+    int bytes_needed = nbytes + 6;
+    if((len - bytes_needed) <= 0) {
+      printf("Error: not enough bytes received yet.\n");
+      return -6;
+    }
+
+    pos += 2 + nbytes;
   }
-  
-  return len;
+
+  return pos;
 }
 
 uint16_t krx_rtp_read_u16(uint8_t* ptr) {

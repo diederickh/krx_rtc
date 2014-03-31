@@ -156,6 +156,7 @@ int krx_ssl_bio_create(BIO* b);
 int krx_ssl_bio_destroy(BIO* b);
 int krx_ssl_bio_read(BIO* b, char* buf, int len);
 int krx_ssl_bio_write(BIO* b, const char* buf, int len);
+
 long krx_ssl_bio_ctrl(BIO* b, int cmd, long num, void* ptr);
 int krx_ssl_verify(int ok, X509_STORE_CTX* ctx);
 int krx_ssl_print_fingerprint(krx_ssl* k);
@@ -507,7 +508,22 @@ int krx_udp_receive(udp_conn* c) {
           printf("Error: cannot unprotect, err: %d. len: %d <> %d\n", sr, len, buflen);
         }
         else {
-          krx_rtp_decode(&c->rtp, c->buf, buflen);
+          int nread = 0;
+          int to_read = buflen;
+          uint8_t* parse_buffer = c->buf;
+          int total_read = 0;
+          printf("~~\n");
+          do { 
+
+            nread = krx_rtp_decode(&c->rtp, parse_buffer, to_read);
+
+            if(nread < 0) {
+              break;
+            }
+            total_read += nread;
+            to_read -= nread;
+            printf("/ %d\n", total_read);
+          } while (to_read > 0);
         }
 
       }
