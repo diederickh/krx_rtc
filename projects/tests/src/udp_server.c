@@ -45,6 +45,7 @@
 
 #include "krx_dtls.h"
 #include "krx_rtp.h"
+#include "krx_ivf.h"
 #include <srtp.h>
 
 #define KRX_UDP_BUF_LEN 4096
@@ -188,7 +189,20 @@ httpd_conn* hcon_ptr = NULL;
 udp_conn* ucon_ptr = NULL;
 
 int main() {
-  printf("udp.\n");
+
+  /* dump previously recorded file */
+#if 0
+  printf("Opening recorded file.\n");
+  krx_ivf_t ivf;
+  krx_ivf_init(&ivf);
+  krx_ivf_open(&ivf);
+  krx_ivf_read_header(&ivf);
+  krx_ivf_read_frame(&ivf);
+  printf("----\n");
+  return 0;
+#endif  
+  /* -------------------------------------------------- */
+
   udp_conn ucon;
   ucon.dtls.user = &ucon;
   ucon.dtls.type = KRX_DTLS_TYPE_SERVER;
@@ -508,11 +522,15 @@ int krx_udp_receive(udp_conn* c) {
           printf("Error: cannot unprotect, err: %d. len: %d <> %d\n", sr, len, buflen);
         }
         else {
+          krx_rtp_decode(&c->rtp, c->buf, buflen);
+
+          /*
           int nread = 0;
           int to_read = buflen;
           uint8_t* parse_buffer = c->buf;
           int total_read = 0;
           printf("~~\n");
+
           do { 
 
             nread = krx_rtp_decode(&c->rtp, parse_buffer, to_read);
@@ -524,6 +542,7 @@ int krx_udp_receive(udp_conn* c) {
             to_read -= nread;
             printf("/ %d\n", total_read);
           } while (to_read > 0);
+          */
         }
 
       }
