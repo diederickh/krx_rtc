@@ -260,11 +260,18 @@ int main() {
   }
 
   krx_dtls_shutdown();
+
 }
 
 void krx_udp_sighandler(int signum) {
   printf("Verbose: handled sig.\n");
   must_run = false;
+
+  if(ucon_ptr) {
+    printf("Closing IVF!.\n");
+    krx_ivf_destroy(&ucon_ptr->rtp.ivf);
+  }
+
   exit(EXIT_FAILURE);
 }
 
@@ -454,19 +461,19 @@ int handle_stun(udp_conn* c, uint8_t *packet, size_t len) {
 int krx_udp_receive(udp_conn* c) {
 
   socklen_t len = sizeof(c->client);
-  int r = recvfrom(c->sock, c->buf, KRX_UDP_BUF_LEN, 0, (struct sockaddr*)&c->client, &len);
+  ssize_t nread = recvfrom(c->sock, c->buf, KRX_UDP_BUF_LEN, 0, (struct sockaddr*)&c->client, &len);
 
-  if(r < 0) {
+  if(nread < 0) {
     printf("Error: cannot receive.\n");
     return -1;
   }
-  if(r < 2) { 
+  if(nread < 2) { 
     printf("Only received 2 bytes?\n");
     return 0;
   }
 
   if((c->buf[0] == 0x00 || c->buf[0] == 0x01) && (c->buf[1] == 0x00 || c->buf[1] == 0x01) ) {
-    handle_stun(c, c->buf, r);
+    handle_stun(c, c->buf, nread);
   }
   else {
     if(krx_dtls_is_handshake_done(&c->dtls) > 0) {
@@ -504,52 +511,46 @@ int krx_udp_receive(udp_conn* c) {
         // TLS_RSA_WITH_AES_128_CBC_SHA 
         printf("---> cipher: %s\n", SSL_CIPHER_get_name(SSL_get_current_cipher(c->dtls.ssl)));
 
-        printf("one\n");
+
         /* create SRTP session */
         err_status_t sr = srtp_create(&c->srtp.session, &c->srtp.policy);
         if(sr != err_status_ok) {
           printf("Error: cannot create srtp session: %d.\n", sr);
           exit(EXIT_FAILURE);
         }
-        printf("two\n"); 
+
+        /* @TODO --- CLEANUP! - WE NEED TO UNPROTECT THIS DIRECTLY!!!  SEE "MARKER-MARKER" below*/
+        int buflen = nread;
+        sr = srtp_unprotect(c->srtp.session, c->buf, &buflen);
+        
+        if(sr != err_status_ok) {
+          printf("Error: cannot unprotect, err: %d. len: %d <> %d\n", sr, len, buflen);
+        }
+        else {
+          //printf("~ %zd bytes read // buflen: %d.\n", nread, buflen);
+          krx_rtp_decode(&c->rtp, c->buf, buflen);
+        }
 
       }
       else if(c->state == KRX_STATE_SSL_INIT_READY) {
-        int buflen = r;
+        /* @TODO --- CLEANUP! duplicate, see a couple of line above */
+        /* MARKER-MARKER */
+        int buflen = nread;
         err_status_t sr = srtp_unprotect(c->srtp.session, c->buf, &buflen);
         
         if(sr != err_status_ok) {
           printf("Error: cannot unprotect, err: %d. len: %d <> %d\n", sr, len, buflen);
         }
         else {
+          //printf("~ %zd bytes read // buflen: %d.\n", nread, buflen);
           krx_rtp_decode(&c->rtp, c->buf, buflen);
-
-          /*
-          int nread = 0;
-          int to_read = buflen;
-          uint8_t* parse_buffer = c->buf;
-          int total_read = 0;
-          printf("~~\n");
-
-          do { 
-
-            nread = krx_rtp_decode(&c->rtp, parse_buffer, to_read);
-
-            if(nread < 0) {
-              break;
-            }
-            total_read += nread;
-            to_read -= nread;
-            printf("/ %d\n", total_read);
-          } while (to_read > 0);
-          */
         }
 
       }
       
     }
     else {
-      krx_dtls_handle_traffic(&c->dtls, c->buf, r);
+      krx_dtls_handle_traffic(&c->dtls, c->buf, nread);
     }
   }
   return 0;

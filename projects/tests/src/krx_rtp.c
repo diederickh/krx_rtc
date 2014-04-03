@@ -19,12 +19,10 @@ int krx_rtp_init(krx_rtp_t* k) {
   if(krx_ivf_create(&k->ivf) < 0) {
     return -2;
   }
-  
-  /*
-  if(krx_ivf_write_header(&k->ivf) < 0) {
-    return -3;
-  }
-  */
+
+  k->prev_seq = 0;
+  k->pos = 0; 
+  k->nsize = 0;
 
   return 0;
 }
@@ -90,11 +88,25 @@ int krx_rtp_decode(krx_rtp_t* k, uint8_t* buf, int len) {
   pkt->padding = (buf[0] & 0x20) >> 4;
   pkt->extension = (buf[0] & 0x10) >> 3;
   pkt->csrc_count = (buf[0] & 0x0F);
-  pkt->marker = (buf[1] & 0x80) >> 7;
-  pkt->payload_type = (buf[1] & 0x7F);
-  pkt->sequence_number = krx_rtp_read_u16(buf+2); 
-  pkt->timestamp = krx_rtp_read_u32(buf+4);
-  pkt->ssrc = krx_rtp_read_u32(buf+8);
+  len--;
+  buf++;
+  
+  pkt->marker = (buf[0] & 0x80) >> 7;
+  pkt->payload_type = (buf[0] & 0x7F);
+  len--;
+  buf++;
+  
+  pkt->sequence_number = krx_rtp_read_u16(buf); 
+  buf += 2;
+  len -=2;
+
+  pkt->timestamp = krx_rtp_read_u32(buf);
+  buf += 4;
+  len -= 4;
+
+  pkt->ssrc = krx_rtp_read_u32(buf);
+  buf += 4;
+  len -= 4;
 
   // @todo(roxlu): handle csrc_count > 0
   if(pkt->csrc_count != 0) {
@@ -102,56 +114,14 @@ int krx_rtp_decode(krx_rtp_t* k, uint8_t* buf, int len) {
     exit(EXIT_FAILURE);
   }
 
-#if 1
-  printf("-\n");
-  printf("Version: %d\n", pkt->version);
-  printf("Padding: %d\n", pkt->padding);
-  printf("Extension: %d\n", pkt->extension);
-  printf("CSRC count: %d\n", pkt->csrc_count);
-  printf("Marker: %d\n", pkt->marker);
-  printf("Payload type: %d\n", pkt->payload_type);
-  printf("Sequence number: %d\n", pkt->sequence_number);
-  printf("Timestamp: %u\n", pkt->timestamp);
-  printf("SSRC: %u\n", pkt->ssrc);
-#endif
 
   /* VP8 */
-  int r = krx_rtp_decode_vp8(k, pkt, buf+12, (len - 12));
+  int r = krx_rtp_decode_vp8(k, pkt, buf, len);
   if(r < 0) {
     return -5;
   }
+  pkt->is_free = 1;
 
-#if 0
-  static int found_keyframe = 0;
-  if(found_keyframe == 0 && pkt->P == 0) {
-    found_keyframe = 1;
-    printf("-----------------------------------------> KEY FRAME --------------------------------- \n");
-  }
-  else {
-    printf("++ Verbose: set to free again.\n");
-    //pkt->is_free = 1;
-  }
-  
-  if(found_keyframe) {
-    /* reconstruct a frame */
-    uint8_t frame_buf[8192];
-    int nbytes = krx_rtp_reconstruct_frames(k, frame_buf, sizeof(frame_buf));
-    if(nbytes > 0) {
-      printf("+++++++++++++++++++++++++++++++++ RECONSTRUCTED FRAME  +++++++++++++++++++++++++++++++++++ \n");
-      /* write the frame */
-      static uint64_t ts = 0;
-      krx_ivf_write_frame(&k->ivf, ts, frame_buf, nbytes);
-      ++ts;
-      static uint32_t bytes_written = 0;
-      bytes_written += nbytes;
-      printf("Bytes written: %u\n", (bytes_written/1024));
-      pkt->is_free = 1; // tmp..
-    }
-    else {
-      printf("--------------------------------- NOT RECONSTRUCTED ------------------------------------ \n");
-    }
-  }
-#endif
   return len;
 }
 
@@ -164,7 +134,22 @@ int krx_rtp_decode_vp8(krx_rtp_t* k, krx_rtp_vp8_t* v, uint8_t* buf, int len) {
     return -1;
   }
 
+  /* Reset */
+  v->I = 0;
+  v->L = 0;
+  v->K = 0;
+  v->PictureID = 0;
+  v->TL0PICIDX = 0;
   v->is_free = 0;
+  v->X = 0;
+  v->N = 0;
+  v->S = 0;
+  v->PID = 0;
+  v->I = 0;
+  v->L = 0;
+  v->K = 0;
+  v->M = 0;
+  v->P = 0;
 
   /* VP8-Payload-Descriptor */
   v->X = (buf[0] & 0x80) >> 7;   /* Extended control bits present */
@@ -174,13 +159,7 @@ int krx_rtp_decode_vp8(krx_rtp_t* k, krx_rtp_vp8_t* v, uint8_t* buf, int len) {
   buf++;
   len--;
 
-  /* Extended control bits */
-  v->I = 0;
-  v->L = 0;
-  v->K = 0;
-  v->PictureID = 0;
-  v->TL0PICIDX = 0;
-
+  /*  X: |I|L|T|K| RSV  | (OPTIONAL)  */
   if(v->X == 1) {
     v->I = (buf[0] & 0x80) >> 7;   /* PictureID present */
     v->L = (buf[0] & 0x40) >> 6;   /* TL0PICIDX present */
@@ -191,32 +170,38 @@ int krx_rtp_decode_vp8(krx_rtp_t* k, krx_rtp_vp8_t* v, uint8_t* buf, int len) {
   }
 
   /* PictureID is present */
-  v->M = 0;
-  v->P = 0;
+  if(v->X == 1) {
+    v->M = 0;
+    v->P = 0;
+  }  
 
-  if(v->I == 1) {
-
-    v->P = buf[0] & 0x01;
-    /*
-    if(v->P == 1) {
-      printf("vp ------------------------------------------- KEY FRAME ------------------------------------: %02X\n", buf[0]);
-    }
-    */
-    
-    /* Read the picture ID */
-    v->M = (buf[0] & 0x80) >> 7;
-    uint8_t* dest_ptr = (uint8_t*)&v->PictureID;
-    if(v->M == 1) {
-      dest_ptr[0] = buf[1];
-      dest_ptr[1] = (buf[0] & 0x80);
+  if(v->I) {
+    if(buf[0] & 0x80) {  /* M, if M == 1, the picture ID takes 16 bits */
+      v->PictureID = krx_rtp_read_u16_picture_id(buf);
       buf += 2;
-      len -= 2;
+      len -=2;
     }
     else {
-      printf("Error: krx_rtp_decode_vp8, not implement a 7bit picture id yet.\n");
-      return -2;
+      buf++;
+      len--;
     }
+  }
 
+  if(v->L) {
+    buf++;
+    len--;
+  }
+
+  if(v->T || v->K) {
+    buf++;
+    len--;
+  }
+
+  if(v->S == 1 && v->PID == 0) {
+    if((buf[0] & 0x01) == 0) {
+      printf("+ We received a keyframe.\n");
+      //  exit(0);
+    }
   }
 
   // @todo(roxlu): we only implement a very basic vp8 decoder:
@@ -228,40 +213,71 @@ int krx_rtp_decode_vp8(krx_rtp_t* k, krx_rtp_vp8_t* v, uint8_t* buf, int len) {
     printf("Error: krx_rtp_decode_vp8(), not handling key_idx_present yet.\n");
     return -4;
   }
-
-  /* copy the frame data */
-  if(len < 2048) {
-    memcpy(v->buf, buf, len);
-    v->nbytes = len;
+  if(v->L == 1) {
+    printf("Error: krx_rtp_decode_vp8(), not handling TL0PICIDX.\n");
+    return -5;
   }
 
-#if 1
-  printf("vp8 X-Extended Control: %d\n", v->X);
-  printf("vp8 N-Non Reference Frame: %d\n", v->N);
-  printf("vp8 S-Start of VP8 payload: %d\n", v->S);
-  printf("vp8 PID-Partition Index: %d\n", v->PID);
-  printf("vp8 I-Picture ID Present: %d\n", v->I);
-  printf("vp8 L-Pic IDX Present (TL0PICIDX): %d\n", v->L);
-  printf("vp8 T-TID Present: %d\n", v->T);
-  printf("vp8 K-Key IDX Present: %d\n", v->K);
-  printf("vp8 Picture ID: %u\n", v->PictureID);
-#endif
+  /* check if sequence number increases correctly */
+  if(k->prev_seq != 0 && k->prev_seq != (v->sequence_number-1)) {
+    printf("Error: invalid sequence number; missed a packet.\n");
+    k->prev_seq = v->sequence_number;
+    k->pos = 0;
+    return -6;
+  }
+  k->prev_seq = v->sequence_number;
 
-  /* VP8 Payload Header - FIRST PACKET OF FRAME*/
+  /* VP8 Payload Header */
   if(v->S == 1 && v->PID == 0) {
-    printf("---------------------- FIRST PACKET ------------------ \n");
-    uint8_t size0 = (buf[0] & 0xE0) >> 3;
+
+    /* Inverse key frame flag 0 == key frame. */
+    v->P = (buf[0] & 0x01);  
+
+    /* Size of the first data partition in bytes */
+    uint8_t size0 = (buf[0] & 0xE0) >> 5;
     uint8_t size1 = buf[1];
     uint8_t size2 = buf[2];
     int nbytes = (size0) + (8 * size1) + (2048 * size2);
-    len -= 3;
-    buf += 3;
+
+    /* Version (more like a type of frame): http://tools.ietf.org/html/rfc6386#section-9  */
+    uint8_t ver = buf[0] & 0x1C >> 2;  
+
+    uint16_t video_width = 0;
   }
+
+  /* VP8 Payload Header - FIRST PACKET OF FRAME*/
+  if(v->S == 1 && v->PID == 0) {
+    printf("+ %d: %d, len: %d, N: %d\n", v->PictureID, v->sequence_number, len, v->N);
+  }
+
+
+  
+  /* accumulate buffer */
+  memcpy(k->buf + k->pos, buf, len);
+  k->pos += len;
+
+  /* Last RTP packet? (we should check for missing packets etc... ) */
   if(v->marker == 1) {
-    printf("---------------------- LAST PACKET ------------------ \n");
+    printf("- %d: %d, len: %d, writing: %u bytes, N: %d, S: %d, PID: %d\n", v->PictureID, v->sequence_number, len, k->pos, v->N, v->S, v->PID);
+
+    static uint64_t ts = 0;
+
+    krx_ivf_write_frame(&k->ivf, ts, k->buf, k->pos);
+    printf("\n");
+
+    ts++;
+    k->pos = 0; /* reset */
   }
 
   return start_len;
+}
+
+uint16_t krx_rtp_read_u16_picture_id(uint8_t* ptr) {
+  uint16_t r = 0;
+  uint8_t* p = (uint8_t*)&r;
+  p[0] = ptr[1];
+  p[1] = (p[0] & 0x80);
+  return r;
 }
 
 uint16_t krx_rtp_read_u16(uint8_t* ptr) {
@@ -439,3 +455,30 @@ int krx_rtp_find_packets_with_timestamp(krx_rtp_t* k, uint32_t timestamp, krx_rt
 }
 
 
+void krx_rtp_print(krx_rtp_vp8_t* pkt) {
+
+  if(!pkt) {
+    return;
+  }
+
+  printf("-\n");
+  printf("Version: %d\n", pkt->version);
+  printf("Padding: %d\n", pkt->padding);
+  printf("Extension: %d\n", pkt->extension);
+  printf("CSRC count: %d\n", pkt->csrc_count);
+  printf("Marker: %d\n", pkt->marker);
+  printf("Payload type: %d\n", pkt->payload_type);
+  printf("Sequence number: %d\n", pkt->sequence_number);
+  printf("Timestamp: %u\n", pkt->timestamp);
+  printf("SSRC: %u\n", pkt->ssrc);
+  printf("vp8 X-Extended Control: %d\n", pkt->X);
+  printf("vp8 N-Non Reference Frame: %d\n", pkt->N);
+  printf("vp8 S-Start of VP8 payload: %d\n", pkt->S);
+  printf("vp8 PID-Partition Index: %d\n", pkt->PID);
+  printf("vp8 I-Picture ID Present: %d\n", pkt->I);
+  printf("vp8 L-Pic IDX Present (TL0PICIDX): %d\n", pkt->L);
+  printf("vp8 T-TID Present: %d\n", pkt->T);
+  printf("vp8 K-Key IDX Present: %d\n", pkt->K);
+  printf("vp8 Picture ID: %u\n", pkt->PictureID);
+
+}

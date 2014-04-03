@@ -9,6 +9,11 @@
   - http://www.ffmpeg.org/doxygen/2.1/rtpdec__vp8_8c_source.html
   - http://doubango.googlecode.com/svn-history/r653/branches/2.0/doubango/tinyDAV/src/codecs/vpx/tdav_codec_vp8.c
 
+  Old version:
+  -------------
+  - Before cleanup: https://gist.github.com/roxlu/f816a3da4861befc21db
+  - First success of a recording: https://gist.github.com/roxlu/3eacd69c3389dd0784f7
+
 */
 #ifndef ROXLU_KRX_RTP_H
 #define ROXLU_KRX_RTP_H
@@ -66,6 +71,12 @@ struct krx_rtp {
   krx_ivf_t ivf;                       /* just for debugging; used to record the vp8 data */
   krx_rtp_vp8_t vp8;                   /* vp8 header */
   krx_rtp_vp8_t vp8_packets[RTP_NUM_PACKETS];
+
+  /* testing with acummulation buffer */
+  uint8_t buf[1024*1024];   /* accumulation buffer */
+  uint16_t prev_seq;        /* previous sequence number */
+  uint32_t pos;             /* position in the buffer */
+  uint32_t nsize;           /* the size of the frame as we extract from the first partition */
 };
 
 int krx_rtp_init(krx_rtp_t* k);
@@ -75,6 +86,9 @@ krx_rtp_vp8_t* krx_rtp_find_free_vp8_packet(krx_rtp_t* k);
 int krx_rtp_vp8_init(krx_rtp_vp8_t* v);
 uint16_t krx_rtp_read_u16(uint8_t* ptr);
 uint32_t krx_rtp_read_u32(uint8_t* ptr);
+uint16_t krx_rtp_read_u16_picture_id(uint8_t* ptr);
+
+void krx_rtp_print(krx_rtp_vp8_t* k);
 
 /* frame reconstruction */
 int krx_rtp_reconstruct_frames(krx_rtp_t* k, uint8_t* buf, int len);

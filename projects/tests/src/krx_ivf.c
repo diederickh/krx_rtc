@@ -68,6 +68,9 @@ int krx_ivf_write_frame(krx_ivf_t* k, uint64_t timestamp, uint8_t* data, uint32_
   krx_ivf_write(k, data, len);        /* the frame */
 
   fflush(k->fp);
+
+  k->num_frames++;
+
   return 0;
 }
 
@@ -75,6 +78,10 @@ int krx_ivf_destroy(krx_ivf_t* k) {
   assert(k);
   assert(k->fp != NULL);
   
+  /* rewrite the number of frames */
+  fseek(k->fp, 24, SEEK_SET);
+  krx_ivf_write_u64(k, k->num_frames);
+
   if(fclose(k->fp) != 0) {
     printf("Error: cannot close the ivf file.\n");
     return -1;
@@ -132,7 +139,7 @@ int krx_ivf_write(krx_ivf_t* k, uint8_t* data, uint32_t len) {
 
   size_t r = fwrite((char*)data, 1, len, k->fp);
   if(r != len) {
-    printf("Error: krx_ivf_write() failed: %d, nbytes: %u.\n", r, len);
+    printf("Error: krx_ivf_write() failed: %zu, nbytes: %u.\n", r, len);
     return -1;
   }
 
