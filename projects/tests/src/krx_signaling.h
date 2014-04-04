@@ -2,6 +2,8 @@
 #define KRX_SIGNALING_H
 
 #include <uv.h>
+#include <jansson.h>
+#include <http_parser.h>
 #include <openssl/err.h>
 #include <openssl/dh.h>
 #include <openssl/ssl.h>
@@ -31,6 +33,8 @@ struct krx_signaling_conn {
   SSL* ssl;
   BIO* in_bio;
   BIO* out_bio;
+  http_parser_settings http_cfg;
+  http_parser http;
 };
 
 struct krx_signaling {

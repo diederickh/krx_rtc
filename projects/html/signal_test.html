@@ -1,0 +1,34 @@
+<!-- /* -*- mode: html -*- */ -->
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <title>WebRTC - Signaling Test</title>
+  <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.0/jquery.min.js"></script>
+  <script src="signaling.js"> </script>
+  <link rel="stylesheet" href="style.css"></link>
+</head>
+<body>
+  <h1>Signaling Test</h1>
+  <textarea id="sdp" rows="20" cols="60">
+v=0
+o=Mozilla-SIPUA-29.0 610 0 IN IP4 0.0.0.0
+s=SIP Call
+t=0 0
+a=ice-ufrag:de755630
+a=ice-pwd:834e9a45b67605ab75f1622bde22e28d
+a=fingerprint:sha-256 3E:4F:43:C0:5E:70:3B:9A:33:75:50:03:5E:49:12:A4:C8:A8:E6:E1:56:27:E7:40:2B:D3:F1:D6:7E:A7:39:23
+m=video 3084 RTP/SAVPF 120
+c=IN IP4 84.105.186.141
+a=rtpmap:120 VP8/90000
+a=sendrecv
+a=rtcp-fb:120 nack
+a=rtcp-fb:120 nack pli
+a=rtcp-fb:120 ccm fir
+a=setup:actpass
+a=candidate:0 1 UDP 2130379007 192.168.0.194 2233 typ host
+a=candidate:1 1 UDP 1694236671 84.105.186.141 3084 typ srflx raddr 192.168.0.194 rport 49153
+a=candidate:0 2 UDP 2130379006 192.168.0.194 54674 typ host
+a=candidate:1 2 UDP 1694236670 84.105.186.141 3085 typ srflx raddr 192.168.0.194 rport 54674
+a=rtcp-mux
+  </textarea>
+</body>

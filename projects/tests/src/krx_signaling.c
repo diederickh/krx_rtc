@@ -2,6 +2,82 @@
 #include <stdlib.h>
 #include "krx_signaling.h"
 
+/* --------------------------------------------------------------------------- */
+
+int krx_signaling_http_on_message_begin(http_parser* p) {
+  return 0;
+}
+
+int krx_signaling_http_on_url(http_parser* p, const char* at, size_t length) {
+  return 0;
+}
+
+int krx_signaling_http_on_status(http_parser* p, const char* at, size_t length) {
+  return 0;
+}
+
+int krx_signaling_http_on_header_field(http_parser* p, const char* at, size_t length) {
+  return 0;
+}
+
+int krx_signaling_http_on_header_value(http_parser* p, const char* at, size_t length) {
+  return 0;
+}
+
+int krx_signaling_http_on_headers_complete(http_parser* p) {
+  return 0;
+}
+
+int krx_signaling_http_on_body(http_parser* p, const char* at, size_t length) {
+  /*
+  printf("++++++++++++++++++++++++++++++++\n");
+  for(int i = 0; i < length; ++i) {
+    printf("%c", at[i]);
+  }
+  printf("++++++++++++++++++++++++++++++++\n");
+  */
+  json_error_t err;
+  json_t* root = json_loads(at, 0, &err);
+  if(!root) {
+    printf("Error: krx_signaling_http_on_body(), failed to parse incoming json.\n");
+    return -1;
+  }
+
+  json_t* jact = json_object_get(root, "act");
+  if(!jact || !json_is_string(jact)) {
+    printf("Error: krx_signaling_http_on_body(), not `act` found in json string.\n");
+    json_decref(root);
+    return -2;
+  }
+
+  const char* act = json_string_value(jact);
+  if(strcmp(act, "sdp_offer") == 0) {
+
+    json_t* joffer = json_object_get(root, "offer");
+    if(!joffer || !json_is_string(joffer)) {
+      printf("Error: krx_signaling_http_on_body(), no `offer` element found.\n");      
+      json_decref(root);
+      return -3;
+    }
+
+    const char* offer = json_string_value(joffer);
+    printf("SDP: %s\n", offer);
+
+  }
+  else {
+    printf("Error: krx_signaling_http_on_body(), unhandled act.\n");
+    json_decref(root);
+    return -4;
+  }
+
+  json_decref(root);
+
+  return 0;
+}
+
+int krx_signaling_http_on_message_complete(http_parser* p) {
+  return 0;
+}
 
 /* --------------------------------------------------------------------------- */
 static uv_buf_t krx_signaling_alloc_buffer(uv_handle_t* handle, size_t nbytes) {
@@ -27,11 +103,21 @@ static void krx_signaling_conn_read(uv_stream_t* stream, ssize_t nbytes, uv_buf_
   }
 
   /* digest incoming data */
+#if 0  
   for(ssize_t i = 0; i < nbytes; ++i) {
     printf("%c", buf.base[i]);
   }
+#endif
+
+  krx_signaling_conn* c = (krx_signaling_conn*)stream->data;
+  if(!c) {
+    printf("Error: krx_signaling_conn_read(),  user pointer not set.\n");
+    exit(1);
+  }
+  
+  int nparsed = http_parser_execute(&c->http, &c->http_cfg, buf.base, nbytes);
   printf("-\n");
-  printf("READ: %ld\n", nbytes);
+  printf("READ: %ld, PARSED: %d\n", nbytes, nparsed);
 }
 
 static int krx_signaling_conn_init(krx_signaling* k, krx_signaling_conn* c) {
@@ -67,6 +153,20 @@ static int krx_signaling_conn_init(krx_signaling* k, krx_signaling_conn* c) {
     printf("Error: krx_signaling_conn_init(), uv_read_start() failed: %s\n", uv_strerror(r));
     return -5;
   }
+
+  c->client.data = c; /* @todo(roxlu): this could be done initialize only once ... */
+
+  c->http_cfg.on_message_begin      = krx_signaling_http_on_message_begin;
+  c->http_cfg.on_url                = krx_signaling_http_on_url;
+  c->http_cfg.on_status             = krx_signaling_http_on_status;
+  c->http_cfg.on_header_field       = krx_signaling_http_on_header_field;
+  c->http_cfg.on_header_value       = krx_signaling_http_on_header_value;
+  c->http_cfg.on_headers_complete   = krx_signaling_http_on_headers_complete;
+  c->http_cfg.on_body               = krx_signaling_http_on_body;
+  c->http_cfg.on_message_complete   = krx_signaling_http_on_message_complete;
+
+  http_parser_init(&c->http , HTTP_REQUEST);
+  c->http.data = k;
 
   return 0;
 }
