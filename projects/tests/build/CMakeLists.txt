@@ -29,6 +29,7 @@ add_executable(sdp_parser_test ${bd}/../src/sdp_parser_test.c)
 add_executable(signal_server 
   ${bd}/../src/signal_server.c
   ${bd}/../src/krx_https.c
+  ${bd}/../src/krx_signaling.c
   ${extern_source_dir}/http_parser.c
 )
 

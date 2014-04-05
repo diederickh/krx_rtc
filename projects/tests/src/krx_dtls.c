@@ -118,7 +118,7 @@ int krx_dtls_ssl_create(krx_dtls_t* k) {
 
   BIO_set_mem_eof_return(k->in_bio, -1); /* see: https://www.openssl.org/docs/crypto/BIO_s_mem.html */
 
-  k->out_bio = BIO_new(BIO_s_mem());
+  k->out_bio = BIO_new(BIO_s_mem()); /* @todo(roxlu): free this one!! */
   if(k->out_bio == NULL) {
     printf("Error: cannot allocate write bio.\n");
     return -3;
@@ -143,6 +143,7 @@ int krx_dtls_ssl_create(krx_dtls_t* k) {
 void krx_dtls_ssl_info_callback(const SSL* ssl, int where, int ret) {
 
   if(ret == 0) {
+    ERR_print_errors_fp(stderr);
     printf("-- krx_ssl_info_callback: error occured.\n");
     return;
   }

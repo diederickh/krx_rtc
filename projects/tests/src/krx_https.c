@@ -1,6 +1,8 @@
 #include "krx_https.h"
 
 /* --------------------------------------------------------------------------- */
+
+/* http_parser callback */
 static int krx_https_on_message_begin(http_parser* p);
 static int krx_https_on_url(http_parser* p, const char* at, size_t length);
 static int krx_https_on_status(http_parser* p, const char* at, size_t length);
@@ -12,10 +14,12 @@ static int krx_https_on_message_complete(http_parser* p);
 
 static uv_buf_t krx_https_alloc_buffer(uv_handle_t* handle, size_t nbytes);
 static int krx_https_conn_send(krx_https_conn* c, uint8_t* buf, int len);
-static void krx_https_conn_on_write(uv_write_t* req, int status); 
-static void krx_https_conn_read(uv_stream_t* stream, ssize_t nbytes, uv_buf_t buf);
 static int krx_https_conn_init(krx_https* k, krx_https_conn* c);
-static void krx_https_on_new_connection(uv_stream_t* server, int status);
+static int krx_https_conn_shutdown(krx_https_conn* c);                                             /* cleans up allocated memory, state, etc.. so it can be reused again */
+static void krx_https_conn_on_write(uv_write_t* req, int status); 
+static void krx_https_conn_on_read(uv_stream_t* stream, ssize_t nbytes, uv_buf_t buf);
+static void krx_https_conn_on_closed(uv_handle_t* handle);
+static void krx_https_conn_on_new(uv_stream_t* server, int status);
 
 static void krx_https_ssl_info_callback(const SSL* ssl, int where, int ret);
 static int krx_https_ssl_create(krx_https* k, krx_https_conn* c);
@@ -52,50 +56,6 @@ static int krx_https_on_headers_complete(http_parser* p) {
 
 static int krx_https_on_body(http_parser* p, const char* at, size_t length) {
 
-#if 0  
-  printf("++++++++++++++++++++++++++++++++\n");
-  for(int i = 0; i < length; ++i) {
-    printf("%c", at[i]);
-  }
-  printf("++++++++++++++++++++++++++++++++\n");
-
-  json_error_t err;
-  json_t* root = json_loads(at, 0, &err);
-  if(!root) {
-    printf("Error: krx_https_http_on_body(), failed to parse incoming json.\n");
-    return -1;
-  }
-
-  json_t* jact = json_object_get(root, "act");
-  if(!jact || !json_is_string(jact)) {
-    printf("Error: krx_https_http_on_body(), not `act` found in json string.\n");
-    json_decref(root);
-    return -2;
-  }
-
-  const char* act = json_string_value(jact);
-  if(strcmp(act, "sdp_offer") == 0) {
-
-    json_t* joffer = json_object_get(root, "offer");
-    if(!joffer || !json_is_string(joffer)) {
-      printf("Error: krx_https_http_on_body(), no `offer` element found.\n");      
-      json_decref(root);
-      return -3;
-    }
-
-    const char* offer = json_string_value(joffer);
-    printf("SDP: %s\n", offer);
-
-  }
-  else {
-    printf("Error: krx_https_http_on_body(), unhandled act.\n");
-    json_decref(root);
-    return -4;
-  }
-
-  json_decref(root);
-#endif
-
   krx_https_conn* c = (krx_https_conn*)p->data;
   if(!c) {
     printf("Error: no data pointer set on http parser.\n");
@@ -110,6 +70,16 @@ static int krx_https_on_body(http_parser* p, const char* at, size_t length) {
 }
 
 static int krx_https_on_message_complete(http_parser* p) {
+  /*
+  const char* resp = "HTTP/1.0 200 OK\r\n"
+    "Content-Length: 4\r\n" 
+    "Connection:Close\r\n"
+    "\r\n"
+    "test";
+
+  krx_https_conn* c = (krx_https_conn*)p->data;
+  krx_https_send_data(c, (uint8_t*)resp, strlen(resp)+1);
+  */
   return 0;
 }
 
@@ -126,7 +96,6 @@ static uv_buf_t krx_https_alloc_buffer(uv_handle_t* handle, size_t nbytes) {
 }
 
 static void krx_https_conn_on_write(uv_write_t* req, int status) {
-  printf("WRITTEN SOME DATA!: status: %d\n", status);
   free(req);
 }
 
@@ -134,8 +103,6 @@ static int krx_https_conn_send(krx_https_conn* c, uint8_t* buf, int len) {
 
   uv_write_t* req = NULL;
   int r = -1;
-
-  printf("Verbose: sending %d bytes.\n", len);
 
   /* validate input */
   if(!c) {
@@ -187,8 +154,6 @@ static int krx_https_ssl_check_output_buffer(krx_https_conn* c) {
 
   /* check if there is data in the output bio. */
   int pending = BIO_ctrl_pending(c->out_bio);
-  printf("Verbose: pending in out_bio: %d\n", pending);
-
   if(pending > 0) {
 
     uint8_t* buffer = (uint8_t*)malloc(pending); /* is free'd after write, @todo(roxlu): make sure it is! */
@@ -211,15 +176,16 @@ static int krx_https_ssl_check_output_buffer(krx_https_conn* c) {
 
 static int krx_https_ssl_check_input_buffer(krx_https_conn* c) {
 
+  int r = 0;
+
   if(!c || !c->ssl) {
     printf("Error: krx_https_ssl_check_input_buffer(), invalid pointers.\n");
     return -1;
   }
 
-  printf("Checking input buffer.\n");
   int pending = BIO_ctrl_pending(c->in_bio);
-  if(pending > 0) {
-    printf("Pending to read: %d\n", pending);
+  if(pending <= 0) {
+    return 0;
   }
 
   uint8_t* buf = malloc(pending);
@@ -228,79 +194,73 @@ static int krx_https_ssl_check_input_buffer(krx_https_conn* c) {
     return -2;
   }
 
-  int r = SSL_read(c->ssl, buf, pending);
-  if(r < 0) {
-    printf("Error: krx_https_ssl_check_input_buffer(), cannot SSL_read().\n");
+  int nread = 0;
+  while(pending > 0) {
+    r = SSL_read(c->ssl, buf + nread, pending);
+    if(r <= 0) {
+      break;
+    }
+    nread += r;
+    pending -= r;
+  }
+
+  r = nread;
+
+  if(r <= 0) {
     free(buf);
     buf = NULL;
-    return -3;
+    return -4;
   }
-
-#if 0
-  // @todo(roxlu): we should add a smarter buffer loop here.
-  if(r != pending) {
-    printf("Error: krx_https_ssl_check_input_buffer(), didn't read everything .. @todo(roxlu): handle this. read: %d, pending: %d\n", r, pending);
-    exit(1);
-  }
-#endif
 
   int nparsed = http_parser_execute(&c->http, &c->http_cfg, (const char*)buf, r);
-  
-#if 0
-  for(int i = 0; i < pending; ++i) {
-    printf("%c", buf[i]);
-  }
-  printf("-\n");
-#endif
+
+  free(buf);
+  buf = NULL;
 
   return pending;
 }
 
-
-static void krx_https_conn_read(uv_stream_t* stream, ssize_t nbytes, uv_buf_t buf) {
-
-  /* disconnected or other error. */
-  if(nbytes < 0) {
-    printf("Error: krx_https_conn_read(), error: %zd: %s\n", nbytes, uv_strerror(nbytes));
-    printf("@todo(roxlu): krx_https_conn_read(), handle disconnecting client.\n");
-    free(buf.base);
-    uv_close((uv_handle_t*)stream, NULL);
-    return;
-  }
-
-  /* digest incoming data */
-#if 0  
-  for(ssize_t i = 0; i < nbytes; ++i) {
-    printf("%c", buf.base[i]);
-  }
-#endif
+static void krx_https_conn_on_read(uv_stream_t* stream, ssize_t nbytes, uv_buf_t buf) {
 
   krx_https_conn* c = (krx_https_conn*)stream->data;
   if(!c) {
     printf("Error: krx_https_conn_read(),  user pointer not set.\n");
     exit(1);
   }
+
+  krx_https_ssl_check_input_buffer(c); 
   
+  /* disconnected or other error. */
+  if(nbytes < 0) {
+    free(buf.base);
+    printf("- krx_https_conn_read(), %p, status: %s\n", c, uv_strerror(nbytes));
+    krx_https_close_connection(c);
+    return;
+  }
+
+  /* digest incoming data */
   int written = BIO_write(c->in_bio, buf.base, nbytes);
-  printf("nothing written et? %d\n", written);
+
   if(written > 0) {
     if(!SSL_is_init_finished(c->ssl)) {
-      SSL_do_handshake(c->ssl);
+
+      int r = SSL_do_handshake(c->ssl);
+
+      if(r < 0) {
+        char buf[200];
+        int err = SSL_get_error(c->ssl, r);
+        char* d = ERR_error_string(err,buf);
+      }
+
       krx_https_ssl_check_output_buffer(c);
     }
-    else {
-      printf("HANDSHAKE READY\n");
-      krx_https_ssl_check_input_buffer(c);
-    }
   }
- 
-  /*
-  int nparsed = http_parser_execute(&c->http, &c->http_cfg, buf.base, nbytes);
-  printf("-\n");
-  printf("READ: %ld, PARSED: %d\n", nbytes, nparsed);
-  */
-}
 
+  krx_https_ssl_check_input_buffer(c); 
+
+  free(buf.base);
+  buf.base = NULL;
+}
 
 static int krx_https_conn_init(krx_https* k, krx_https_conn* c) {
 
@@ -330,7 +290,7 @@ static int krx_https_conn_init(krx_https* k, krx_https_conn* c) {
     return -4;
   }
 
-  r = uv_read_start((uv_stream_t*)&c->client, krx_https_alloc_buffer, krx_https_conn_read);
+  r = uv_read_start((uv_stream_t*)&c->client, krx_https_alloc_buffer, krx_https_conn_on_read);
   if(r != 0) {
     printf("Error: krx_https_conn_init(), uv_read_start() failed: %s\n", uv_strerror(r));
     return -5;
@@ -340,8 +300,11 @@ static int krx_https_conn_init(krx_https* k, krx_https_conn* c) {
     printf("Error: krx_https_conn_init(), connection already has an ssl object (?!). @todo(roxlu): fix.\n");
   }
 
+  c->is_free = 0;
   c->k = k;
   c->ssl = NULL;
+  c->in_bio = NULL;
+  c->out_bio = NULL;
   c->client.data = c; /* @todo(roxlu): this could be done initialize only once ... */
 
   /* init http parser */
@@ -366,22 +329,64 @@ static int krx_https_conn_init(krx_https* k, krx_https_conn* c) {
   return 0;
 }
 
+static int krx_https_conn_shutdown(krx_https_conn* c) {
+
+  printf("- krx_https_conn_shutdown(): %p\n", c);
+
+  if(!c) {
+    printf("Error: krx_https_conn_shutdown(), invalid arguments.\n");
+    return -1;
+  }
+  
+#if 0
+  // @todo(roxlu): freeing the bios gives segfault... does SSL_free() frees the bios too?
+  if(c->in_bio) {
+    BIO_free_all(c->in_bio);
+    c->in_bio = NULL;
+  }
+
+  if(c->out_bio) {
+    BIO_free_all(c->out_bio);
+    c->out_bio = NULL;
+  }
+#endif
+
+  if(c->ssl) {
+    SSL_free(c->ssl);
+    c->ssl = NULL;
+  }
+
+  if(!c->k) {
+    printf("Error: krx_https_conn_shutdown(), k member not set!.\n");
+  }
+  else {
+
+    c->k->num_connections--;
+
+    if(c->k->num_connections < 0) {
+      // shouldn't happen.
+      printf("Error: krx_https_conn_shutdown(), less then zero connections (?)...\n");
+    }
+
+    printf("- krx_https_conn_shutdown(), disconnected, total connections: %d\n", c->k->num_connections);
+  }
+
+  c->is_free = 1;
+
+  return 0;
+}
+
 static void krx_https_ssl_info_callback(const SSL* ssl, int where, int ret) {
+
   if(ret == 0) {
+    ERR_print_errors_fp(stderr);
     printf("-- krx_ssl_info_callback: error occured.\n");
     return;
   }
 
-  SSL_WHERE_INFO(ssl, where, SSL_CB_LOOP, "LOOP");
-  SSL_WHERE_INFO(ssl, where, SSL_CB_EXIT, "EXIT");
-  SSL_WHERE_INFO(ssl, where, SSL_CB_READ, "READ");
-  SSL_WHERE_INFO(ssl, where, SSL_CB_WRITE, "WRITE");
-  SSL_WHERE_INFO(ssl, where, SSL_CB_ALERT, "ALERT");
   SSL_WHERE_INFO(ssl, where, SSL_CB_READ_ALERT, "READ ALERT");
   SSL_WHERE_INFO(ssl, where, SSL_CB_WRITE_ALERT, "WRITE ALERT");
   SSL_WHERE_INFO(ssl, where, SSL_CB_ACCEPT_LOOP, "ACCEPT LOOP");
-  SSL_WHERE_INFO(ssl, where, SSL_CB_ACCEPT_EXIT, "ACCEPT EXIT");
-  SSL_WHERE_INFO(ssl, where, SSL_CB_CONNECT_LOOP, "CONNECT LOOP");
   SSL_WHERE_INFO(ssl, where, SSL_CB_CONNECT_EXIT, "CONNECT EXIT");
   SSL_WHERE_INFO(ssl, where, SSL_CB_HANDSHAKE_START, "HANDSHAKE START");
   SSL_WHERE_INFO(ssl, where, SSL_CB_HANDSHAKE_DONE, "HANDSHAKE DONE");
@@ -412,7 +417,9 @@ static int krx_https_ssl_create(krx_https* k, krx_https_conn* c) {
   }
 
   /* info callback */
+#if defined(DEBUG)
   SSL_set_info_callback(c->ssl, krx_https_ssl_info_callback);
+#endif
 
   /* bios */
   c->in_bio = BIO_new(BIO_s_mem());
@@ -435,13 +442,10 @@ static int krx_https_ssl_create(krx_https* k, krx_https_conn* c) {
 
   SSL_set_accept_state(c->ssl);
 
-  //  SSL_do_handshake(c->ssl);  
-
-
   return 0;
 }
 
-static void krx_https_on_new_connection(uv_stream_t* server, int status) {
+static void krx_https_conn_on_new(uv_stream_t* server, int status) {
 
   if(status == -1) {
     printf("Error: krx_https_on_new_connection(), received an invalid status: %d\n", status);
@@ -460,7 +464,20 @@ static void krx_https_on_new_connection(uv_stream_t* server, int status) {
     exit(1);
   }
 
-  krx_https_conn* c = &k->connections[k->num_connections];
+  /* find free connection */
+  krx_https_conn* c = NULL;
+  for(int i = 0; i < k->allocated_connections; ++i) {
+    if(k->connections[i].is_free == 1) {
+      c = &k->connections[i];
+      break;
+    }
+  }
+  if(!c) {
+    printf("Error: cannot find a free connection.\n");
+    exit(1);
+  }
+
+  //krx_https_conn* c = &k->connections[k->num_connections];
   
   if(krx_https_conn_init(k, c) < 0) {
     printf("Error: cannot innitialize a new connection.\n");
@@ -468,8 +485,7 @@ static void krx_https_on_new_connection(uv_stream_t* server, int status) {
   }
   
   k->num_connections++;
-
-  printf("Verbose: Got a new connection, total connections: %d.\n", k->num_connections);
+  printf("- krx_https_on_new_connection(), c: %p\n", c);
 };
 
 static int krx_https_ssl_verify_peer(int ok, X509_STORE_CTX* ctx) {
@@ -502,7 +518,8 @@ static int krx_https_ssl_create_ctx(krx_https* k, const char* certfile,  const c
   }
 
   /* the client doesn't have to send it's certificate */
-  SSL_CTX_set_verify(k->ctx, SSL_VERIFY_PEER, krx_https_ssl_verify_peer);
+  //SSL_CTX_set_verify(k->ctx, SSL_VERIFY_PEER, krx_https_ssl_verify_peer);
+  SSL_CTX_set_verify(k->ctx, SSL_VERIFY_NONE, krx_https_ssl_verify_peer);
 
   /* certificate file; contains also the public key */
   r = SSL_CTX_use_certificate_file(k->ctx, certfile, SSL_FILETYPE_PEM);
@@ -552,6 +569,14 @@ int krx_https_init(krx_https* k, const char* certfile, const char* keyfile) {
   if(!k->connections) {
     printf("Error: krx_https_init(), cannot initialize connection array.\n");
     return -3;
+  }
+  
+  /* make all connections "free" */
+  for(int i = 0; i < k->allocated_connections; ++i) {
+    k->connections[i].is_free = 1;
+    k->connections[i].in_bio = NULL;
+    k->connections[i].out_bio = NULL;
+    k->connections[i].ssl = NULL;
   }
 
   k->on_body = NULL;
@@ -621,21 +646,15 @@ int krx_https_start(krx_https* k, const char* ip, int port) {
     return -4;
   }
 
-  r = uv_listen((uv_stream_t*)&k->server, 128, krx_https_on_new_connection);
+  r = uv_listen((uv_stream_t*)&k->server, 128, krx_https_conn_on_new);
   if(r != 0) {
     printf("Error: krx_https_start(), cannot start listening: %s.\n", uv_strerror(r));
     return -5;
   }
 
-  printf("Lets start!.\n");
-
   k->state |= KRX_HTTPS_STATE_ACCEPTING;
   k->server.data = k;
 
-  printf("k->server: %p, k: %p\n", &k->server, &k);
-  printf("k->num_connections: %d\n", k->num_connections);
-  printf("k->allocated_connections: %d\n", k->allocated_connections);
-  printf("k->allocated_connections: %p\n", &k->allocated_connections);
   return 0;
 }
 
@@ -661,4 +680,49 @@ void krx_https_update(krx_https* k) {
 #endif
 
   uv_run(k->loop, UV_RUN_NOWAIT);
+}
+
+static void krx_https_conn_on_closed(uv_handle_t* handle) {
+  krx_https_conn* c = (krx_https_conn*)handle->data;
+  printf("- krx_https_conn_on_closed(): %p\n", c);
+  krx_https_conn_shutdown(c);
+}
+
+int krx_https_close_connection(krx_https_conn* c) {
+  printf("- krx_https_close_connection(): %p\n", c);
+
+  if(!c) {
+    printf("Error: krx_https_close_connection(), invalid connection pointer.\n");
+    return -1;
+  }
+
+  uv_close((uv_handle_t*)&c->client, krx_https_conn_on_closed);
+
+  return 0;
+}
+
+int krx_https_send_data(krx_https_conn* c, uint8_t* buf, int len) {
+
+  if(!c || !buf || len <= 0 || !c->ssl) {
+    printf("Error: krx_https_send_data(), invalid arguments.\n");
+    return -1;
+  }
+  
+  int result = 0;
+  int r = 0;
+  int written = 0;
+
+  while(written < len) {
+    r =  SSL_write(c->ssl, buf, len);
+    if(r <= 0) {
+      printf("Error: krx_https_send_data(), failed SSL_write()ing.\n");
+      result = -2;
+      break;
+    }
+    written += r;
+  }
+  
+  krx_https_ssl_check_output_buffer(c);
+  printf("Written: %d, len: %d\n", written, len);
+  return result;
 }

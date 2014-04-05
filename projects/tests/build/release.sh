@@ -5,7 +5,7 @@ if [ ! -d build.release ] ; then
 fi
 
 cd build.release
-cmake ../
+cmake -DCMAKE_BUILD_TYPE=Release../
 cmake --build . --target install
 
 if [ "$(uname)" == "Darwin" ] ; then 
