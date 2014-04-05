@@ -228,7 +228,8 @@ static void krx_https_conn_on_read(uv_stream_t* stream, ssize_t nbytes, uv_buf_t
     exit(1);
   }
 
-  krx_https_ssl_check_input_buffer(c); 
+  // @todo(roxlu): dont think we need this
+  //krx_https_ssl_check_input_buffer(c); 
   
   /* disconnected or other error. */
   if(nbytes < 0) {

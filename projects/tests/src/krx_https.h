@@ -7,6 +7,10 @@
   signaling server we provide. You can either create a self-signed 
   certificate as illustrated below
 
+  ! note that the number of simultanious connections is limited to 10 
+  ! at the moment, we need to work on that part a bit. It can handle many
+  ! more, but this seems fine for testing purposes.
+
   Example:
   --------
 
