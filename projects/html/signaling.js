@@ -4,7 +4,7 @@ $(document).ready(function(e) {
   var req = { act: "sdp_offer", offer: sdp };
 
   $.ajax({
-    url:"http://localhost:7777/api/v1/get",
+    url:"https://localhost:7777/api/v1/get",
     type:'POST',
     processData:false,
     data: JSON.stringify(req),
