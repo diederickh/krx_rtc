@@ -5,12 +5,14 @@ if [ ! -d build.release ] ; then
 fi
 
 cd build.release
-cmake -DCMAKE_BUILD_TYPE=Release../
+cmake -DCMAKE_BUILD_TYPE=Release ../
 cmake --build . --target install
 
 if [ "$(uname)" == "Darwin" ] ; then 
     cd ./../../../../install/mac-clang-x86_64/bin/
-    ./signal_server
+    ./ice_test
+    #./stun_test
+    #./signal_server
     #./sdp_parser_test
     #./udp_server
     #./ssl_test

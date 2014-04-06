@@ -12,15 +12,19 @@ static int krx_https_on_headers_complete(http_parser* p);
 static int krx_https_on_body(http_parser* p, const char* at, size_t length);
 static int krx_https_on_message_complete(http_parser* p);
 
-static uv_buf_t krx_https_alloc_buffer(uv_handle_t* handle, size_t nbytes);
+/* connections specific */
 static int krx_https_conn_send(krx_https_conn* c, uint8_t* buf, int len);
 static int krx_https_conn_init(krx_https* k, krx_https_conn* c);
 static int krx_https_conn_shutdown(krx_https_conn* c);                                             /* cleans up allocated memory, state, etc.. so it can be reused again */
+
+/* libuv callbacks */
+static uv_buf_t krx_https_alloc_buffer(uv_handle_t* handle, size_t nbytes);
 static void krx_https_conn_on_write(uv_write_t* req, int status); 
 static void krx_https_conn_on_read(uv_stream_t* stream, ssize_t nbytes, uv_buf_t buf);
 static void krx_https_conn_on_closed(uv_handle_t* handle);
 static void krx_https_conn_on_new(uv_stream_t* server, int status);
 
+/* ssl */
 static void krx_https_ssl_info_callback(const SSL* ssl, int where, int ret);
 static int krx_https_ssl_create(krx_https* k, krx_https_conn* c);
 static int krx_https_ssl_verify_peer(int ok, X509_STORE_CTX* ctx);

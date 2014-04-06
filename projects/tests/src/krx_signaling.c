@@ -11,7 +11,7 @@ void krx_sig_on_body(krx_https_conn* c, uint8_t* buf, int nbytes) {
   }
 #endif
 
-#if 1
+#if 0
   printf("\n++++++++++++++++++++++++++++++++\n\n");
   for(int i = 0; i < nbytes; ++i) {
     printf("%c", buf[i]);
