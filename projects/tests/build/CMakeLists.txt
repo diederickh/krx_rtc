@@ -11,6 +11,7 @@ set(use_signal_server FALSE)
 set(use_udp_server FALSE)
 set(use_stun_test FALSE)
 set(use_ice_test TRUE)
+set(use_pjsip_sdp_test TRUE)
 
 include_directories(
   ${extern_include_dir}
@@ -49,12 +50,19 @@ if(use_ice_test)
   add_executable(ice_test
     ${bd}/../src/ice_test.c
     ${bd}/../src/krx_ice_pjnath.c
+    ${bd}/../src/krx_sdp.c
     )
 endif()
 
 if(use_stun_test)
   add_executable(stun_test
     ${bd}/../src/stun_test.c
+    )
+endif()
+
+if(use_pjsip_sdp_test) 
+  add_executable(test_pjsip_sdp
+    ${bd}/../src/test_pjsip_sdp.c
     )
 endif()
 
@@ -68,6 +76,7 @@ set(libraries
   ${extern_lib_dir}/libpjnath.a
   ${extern_lib_dir}/libpj.a
   ${extern_lib_dir}/libpjlib-util.a
+  ${extern_lib_dir}/libpjmedia.a
   ${install_dir}/lib/libstun.a
 )
 
@@ -112,6 +121,10 @@ if(use_ice_test)
   install(TARGETS ice_test DESTINATION bin)
 endif()
  
+if(use_pjsip_sdp_test) 
+  target_link_libraries(test_pjsip_sdp ${libraries})
+  install(TARGETS test_pjsip_sdp DESTINATION bin)
+endif()
 
 #install(TARGETS udp_server DESTINATION bin)
 #install(TARGETS udp_client DESTINATION bin)

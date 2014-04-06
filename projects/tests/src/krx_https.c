@@ -506,7 +506,7 @@ static int krx_https_ssl_create_ctx(krx_https* k, const char* certfile,  const c
     return -1;
   }
 
-  /* create a new context using DTLS */
+  /* create a new context */
   k->ctx = SSL_CTX_new(TLSv1_1_server_method());
   if(!k->ctx) {
     printf("Error: cannot create SSL_CTX.\n");
