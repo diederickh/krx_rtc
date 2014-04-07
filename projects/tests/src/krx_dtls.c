@@ -1,6 +1,7 @@
 #include "krx_dtls.h"
 
 int krx_dtls_init() {
+  /* @todo(roxlu): use krx_global instead for krx_dtls_init()! */
   SSL_library_init();
   SSL_load_error_strings();
   ERR_load_BIO_strings();
@@ -9,6 +10,7 @@ int krx_dtls_init() {
 }
 
 int krx_dtls_shutdown() {
+  /* @todo(roxlu): use krx_global instead for krx_dtls_shutdown()! */
   ERR_remove_state(0);
   ENGINE_cleanup();
   CONF_modules_unload(1);

@@ -51,6 +51,7 @@ if(use_ice_test)
     ${bd}/../src/ice_test.c
     ${bd}/../src/krx_ice_pjnath.c
     ${bd}/../src/krx_sdp.c
+    ${bd}/../src/krx_global.c
     )
 endif()
 

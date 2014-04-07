@@ -40,11 +40,19 @@ function krx_init() {
 
   // peer connections. sender initiates the connection, 
   pc_sender = new window.RTCPeerConnection(servers);
-  pc_sender.onicecandidate = function(evt) {
-    console.log("onicecandidate");
-    console.log(evt);
+  pc_sender.onicecandidate = function(e) {
+    if(e.candidate == null) {
+      // chrome does trickle-ice
+      if(navigator.webkitGetUserMedia) {
+        console.log("-----------onicecandidate-------------");
+        console.log(e);
+        console.log(pc_sender.localDescription.sdp);
+        sdp_input.value = pc_sender.localDescription.sdp;
+      }
+    }
   };
   
+
   // receiver peer connection
   pc_receiver = new window.RTCPeerConnection(servers);
   pc_receiver.onaddstream = function(e) {
@@ -62,7 +70,6 @@ function krx_init() {
 
   // user media callbacks
   var krx_gum_success = function(stream) {
-
    
     if(navigator.mozGetUserMedia) {
       vid_input.mozSrcObject = stream;
@@ -78,7 +85,14 @@ function krx_init() {
 
     // load the SDP 
     pc_sender.createOffer(
+
       function(desc) {
+
+        // chrome does trickle-ice so we need to kick off candidate gathering
+        if(navigator.webkitGetUserMedia) {
+          pc_sender.setLocalDescription(desc);
+        }
+
         console.log("offer", desc.sdp);
 
         // send the password + change the UDP port of the first candidate
@@ -90,10 +104,12 @@ function krx_init() {
           // password
           var line = lines[i].split("a=ice-pwd:");
           if(line.length > 1 && line[1].length > 0) {
+            console.log("Turned off sharing of password.");
+            /*
             $.get("http://localhost:3333/?passwd=" +line[1], function(r) {
               console.log("ice-pwd ok.\n");
             });
-
+            */
             changed_sdp += lines[i];
             continue;
           }
@@ -158,10 +174,9 @@ function krx_init() {
     // set the answer SDPs
     pc_receiver.createAnswer(
       function(desc) {
-        //console.log("createdAnswer.");
-        //console.log(desc);
+
         var remote_changed_sdp = new window.RTCSessionDescription({type:"answer", sdp:input_sdp_val});
-        //console.log("using");
+
         console.log(input_sdp_val);
         
         pc_sender.setRemoteDescription(remote_changed_sdp);
