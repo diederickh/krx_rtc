@@ -6,14 +6,16 @@
     return r;                                   \
   }
 
+/* Privates */
 /* ---------------------------------------------------------------------------- */
 
 static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len);
 static int krx_sdp_get_attr(krx_sdp* k, char* out, int nbytes, const char* name);
 static int krx_sdp_get_media_attr(krx_sdp* k, krx_sdp_media* m, char* out, int nbytes, const char* name);
+static int krx_sdp_free(krx_sdp* k);
 
+/* Parsing */
 /* ---------------------------------------------------------------------------- */
-
 int krx_sdp_init(krx_sdp* k) {
 
   pj_status_t r; 
@@ -24,7 +26,7 @@ int krx_sdp_init(krx_sdp* k) {
   }
 
   /* create pool */
-  pj_caching_pool_init(&k->cp, NULL, 512);
+  pj_caching_pool_init(&k->cp, NULL, 1024);
   k->pool = pj_pool_create(&k->cp.factory, "krx_sdp", 512, 512, NULL);
   if(!k->pool) {
     printf("Error: krx_sdp_init(), pj_pool_create(), failed.\n");
@@ -32,6 +34,7 @@ int krx_sdp_init(krx_sdp* k) {
   }
 
   k->session = NULL;
+  k->lines = NULL;
 
   return 0;
 }
@@ -104,12 +107,21 @@ int krx_sdp_get_pwd(krx_sdp* k, char* outpwd, int nbytes) {
   return krx_sdp_get_attr(k, outpwd, nbytes, "ice-pwd");
 }
 
+/* get the fingerprint which is used with DTLS */
+int krx_sdp_get_fingerprint(krx_sdp* k, char* out, int nbytes) {
+  return krx_sdp_get_attr(k, out, nbytes, "fingerprint");
+}
+
 int krx_sdp_get_media_ufrag(krx_sdp* k, krx_sdp_media* m, char* out, int nbytes) {
   return krx_sdp_get_media_attr(k, m, out, nbytes, "ice-ufrag");
 }
 
 int krx_sdp_get_media_pwd(krx_sdp* k, krx_sdp_media* m, char* out, int nbytes) {
   return krx_sdp_get_media_attr(k, m, out, nbytes, "ice-pwd");
+}
+
+int krx_sdp_get_media_fingerprint(krx_sdp* k, krx_sdp_media* m, char* out, int nbytes) {
+  return krx_sdp_get_media_attr(k, m, out, nbytes, "fingerprint");
 }
 
 /* @todo(roxlu): implement krx_sdp_get_candidate() */
@@ -163,7 +175,6 @@ int krx_sdp_get_media_candidates(krx_sdp* k, krx_sdp_media* m, int nmedia, krx_s
       }
     }
   }
-
   return nfound;
 }
 
@@ -174,15 +185,22 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
   if(!c) { return -1; }
   if(!value) { return -2; }
   if(!len) { return -3; } 
+
+  /* given string is not ended with null char. @todo - parsing candidates can be really optimized here, this is kinda slowing down memory */
+  char* value_str = malloc(sizeof(char) * len + 1);
+  memcpy(value_str, value, len);
+  value_str[len+1] = '\0';
   
   /* Foundation */
-  char* token = strtok(value, " ");
+  char* token = strtok(value_str, " ");
   if(!token) {
     printf("Error: No foundation in candidate.\n");
+    free(value_str);
     return -1;
   }
   if( (strlen(token)+1) > sizeof(c->foundation)) {
     printf("Error: Foundation string to big for candidate.\n");
+    free(value_str);
     return -2;
   }
   memcpy(c->foundation, token, strlen(token)+1);
@@ -191,6 +209,7 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
   token = strtok(NULL, " ");
   if(!token) {
     printf("Error: No component ID found in candidate.\n");
+    free(value_str);
     return -3;
   }
   c->component_id = (uint8_t)atoi(token);
@@ -199,6 +218,7 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
   token = strtok(NULL, " ");
   if(!token) {
     printf("Error: no transport found in candidate.\n");
+    free(value_str);
     return -4;
   }
   
@@ -210,6 +230,7 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
   }
   else {
     printf("Error: cannot find valid transport in candidate.\n");
+    free(value_str);
     return -5;
   }
 
@@ -217,6 +238,7 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
   token = strtok(NULL, " ");
   if(!token) {
     printf("Error: cannot find priority in candidate.\n");
+    free(value_str);
     return -6;
   }
   c->prio = atoi(token);
@@ -225,16 +247,19 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
   token = strtok(NULL, " ");
   if(!token) {
     printf("Error: cannot find candidate address.\n");
+    free(value_str);
     return -7;
   }
 
   if(strchr(token, ':')) {
     printf("Error: @todo(roxlu) implement host:port values in candidates.\n");
+    free(value_str);
     exit(1);
   }
 
   if((strlen(token)+1) > sizeof(c->host)) {
     printf("Error: invalid length for remote ip in candidate.\n");
+    free(value_str);
     return -8;
   }
 
@@ -244,6 +269,7 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
   token = strtok(NULL, " ");
   if(!token) {
     printf("Error: cannot fid port in candidate.\n");
+    free(value_str);
     return -9;
   }
   c->port = atoi(token);
@@ -252,10 +278,12 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
   token = strtok(NULL, " ");
   if(!token) {
     printf("Error: candidate doesn't contains `typ` flag.\n");
+    free(value_str);
     return -10;
   }
   if(strcmp(token, "typ") != 0) {
     printf("Error: candidate has invalid `typ` flag.\n");
+    free(value_str);
     return -11;
   }
 
@@ -263,6 +291,7 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
   token = strtok(NULL, " ");
   if(!token) {
     printf("Error: cannot find candidate type.\n");
+    free(value_str);
     return -12;
   }
 
@@ -279,9 +308,13 @@ static int krx_sdp_parse_candidate(krx_sdp_candidate* c, char* value, int len) {
     c->candidate_type = KRX_SDP_PRFLX;
   }
   else {
-    printf("Error: unknown candidate type in candidate string.\n");
+    printf("Error: unknown candidate type in candidate string: '%s'.\n", token);
+    free(value_str);
     return -13;
   }
+
+  free(value_str);
+  value_str = NULL;
 
   return 0;
 }
@@ -304,14 +337,14 @@ int krx_sdp_print_candidate(krx_sdp_candidate* c) {
   return 0;
 }
 
-int krx_sdp_shutdown(krx_sdp* k) {
+int krx_sdp_deinit(krx_sdp* k) {
   
-  if(!k) {
-    printf("Error: krx_sdp_shutdown(), invald argument.\n");
-    return -1;
-  }
+  if(!k) {return -1; }
 
   pj_caching_pool_destroy(&k->cp);
+
+  /* free any allocated mem. */
+  krx_sdp_free(k);
 
   return 0;
 }
@@ -331,6 +364,124 @@ const char* krx_sdp_transport_type_to_string(krx_sdp_transport_type type) {
     KRX_SDP_DEF_CASE(KRX_SDP_TCP);
     default: return "Unknown.";
   }
+}
+
+/* Generating */
+/* ---------------------------------------------------------------------------- */
+krx_sdp_line* krx_sdp_line_alloc(const char* value) {
+
+  /* create a new line */
+  krx_sdp_line* l = (krx_sdp_line*)malloc(sizeof(krx_sdp_line));
+  if(!l) {
+    printf("Error: cannot allocate a new line.\n");
+    return NULL;
+  }
+
+  l->next = NULL;
+
+  /* value */
+  l->value = (char*)malloc(strlen(value)+1);
+  if(!l->value) {
+    printf("Error: cannot allocate value entry for line.\n");
+    return NULL;
+  }
+  memcpy(l->value, value, strlen(value)+1);
+
+  return l;
+}
+
+int krx_sdp_add_line(krx_sdp* k, const char* value) { 
+
+  /* validate */
+  if(!k) { return -1; } 
+  if(!value) { return -3; } 
+
+  krx_sdp_line* l = krx_sdp_line_alloc(value);
+  if(!l) { return -5; } 
+
+  if(!k->lines) {
+    k->lines = l;
+  }
+  else {
+    krx_sdp_line* last = k->lines;
+    while(last) { 
+      if(last->next == NULL) {
+        break;
+      }
+      last = last->next;
+    }
+    last->next = l;
+  }
+
+  return 0;
+}
+
+int krx_sdp_media_to_string(krx_sdp* k, krx_sdp_media* m, char* out, int nbytes) {
+
+  /* @todo(roxlu): in krx_sdp_media_to_string we should check buffer overflows */
+
+  if(!k) { return -1; } 
+  if(!out) { return -2; } 
+  if(!m) { return -3; } 
+
+  int nwritten = 0;
+  pjmedia_sdp_media* media = k->session->media[m->index];
+
+  /* basic media string */
+  sprintf(out, "m=%.*s %d %.*s ", 
+          (int)media->desc.media.slen, media->desc.media.ptr, 
+          media->desc.port, 
+          (int)media->desc.transport.slen, media->desc.transport.ptr);
+
+  nwritten += strlen(out);
+
+  /* add media formats. */
+  for(int i = 0; i < media->desc.fmt_count; ++i) {
+    if(i + 1 == media->desc.fmt_count) {
+      sprintf(out + nwritten, "%.*s", (int)media->desc.fmt[i].slen, media->desc.fmt[i].ptr);
+    }
+    else {
+      sprintf(out + nwritten, "%.*s ", (int)media->desc.fmt[i].slen, media->desc.fmt[i].ptr);
+    }
+    nwritten = strlen(out);
+  }
+
+  return nwritten + 1;
+}
+
+int krx_sdp_add_media(krx_sdp* dest, krx_sdp* src, krx_sdp_media* m) {
+
+  if(!dest) { return -1; } 
+  if(!src) { return -2; } 
+  if(!m) { return -3; } 
+
+  return 0;
+}
+
+int krx_sdp_print(krx_sdp* k, char* out, int nbytes) {
+
+  if(!k) { return -1; }
+  if(!out) { return -2; } 
+  if(!nbytes) { return -3; } 
+
+  int needed = 0;
+  int nwritten = 0;
+  krx_sdp_line* l = k->lines;
+
+  while(l) {
+
+    needed = strlen(l->value) + 1;
+    nbytes -= needed;
+    if(nbytes < 0) { 
+      return nbytes;
+    }
+
+    sprintf(out + nwritten, "%s\n", l->value);
+    nwritten += needed;
+    l = l->next;
+  }
+ 
+  return nwritten;
 }
 
 /* ---------------------------------------------------------------------------- */
@@ -373,4 +524,20 @@ static int krx_sdp_get_media_attr(krx_sdp* k, krx_sdp_media* m, char* out, int n
   memcpy(out, attr->value.ptr, attr->value.slen);
   
   return attr->value.slen;
+}
+
+static int krx_sdp_free(krx_sdp* k) {
+  if(!k) { return -1; }
+  
+  krx_sdp_line* l = k->lines;
+  krx_sdp_line* next = NULL;
+
+  while(l) { 
+    free(l->value);
+    next = l->next;
+    free(l);
+    l = next;
+  }
+
+  return 0;
 }

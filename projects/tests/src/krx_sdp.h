@@ -26,6 +26,7 @@
 typedef struct krx_sdp krx_sdp;
 typedef struct krx_sdp_media krx_sdp_media;
 typedef struct krx_sdp_candidate krx_sdp_candidate;
+typedef struct krx_sdp_line krx_sdp_line;
 
 struct krx_sdp_media {
   int index; /* index in the session->media of krx_sdp */
@@ -53,23 +54,43 @@ struct krx_sdp_candidate {
   krx_sdp_candidate_type candidate_type;
 };
 
+struct krx_sdp_line { 
+  char* value;
+  krx_sdp_line* next;
+};
+
 struct krx_sdp {
   pj_caching_pool cp;
   pj_pool_t* pool;
   pjmedia_sdp_session* session;
+  krx_sdp_line* lines;           /* used when generating content; very simplistic, just a couple of lines that have been added */
 };
 
-int krx_sdp_init(krx_sdp* k);                                                                                   /* initialze a krx_sdp */
+/* general */
+int krx_sdp_init(krx_sdp* k);                                                                                 /* initialze a krx_sdp */
+int krx_sdp_deinit(krx_sdp* k);                                                                               /* cleanup + free the krx_sdp */
+
+/* parsing */
 int krx_sdp_parse(krx_sdp* k, const char* buf, int len);                                                        /* as len, pass strlen(buf) */
 int krx_sdp_get_media(krx_sdp* k, krx_sdp_media m[], int nmedia, int type);                                     /* get nmedia handles for the given type; on sucess we return the found media types */
 int krx_sdp_get_ufrag(krx_sdp* k, char* out, int nbytes);                                                       /* get ice-ufrag from general part */
 int krx_sdp_get_pwd(krx_sdp* k, char* out, int nbytes);                                                         /* get ice-pwd from general sdp part */
+int krx_sdp_get_candidates(krx_sdp* k, krx_sdp_candidate* out, int ntotal);                                     /* get candidates from the general part in the sdp */
+int krx_sdp_get_fingerprint(krx_sdp* k, char* out, int nbytes);                                                 /* get the fingerprint that is used for dtls */
+int krx_sdp_get_media_candidates(krx_sdp* k, krx_sdp_media* m, int nmedia, krx_sdp_candidate* out, int ntotal); /* get candidates from a specific media element */
 int krx_sdp_get_media_ufrag(krx_sdp* k, krx_sdp_media* m, char* out, int nbytes);                               /* get the ice-ufrag for the given media */
 int krx_sdp_get_media_pwd(krx_sdp* k, krx_sdp_media* m, char* out, int nbytes);                                 /* get the ice-ufrag for the given media */
-int krx_sdp_get_candidates(krx_sdp* k, krx_sdp_candidate* out, int ntotal);                                     /* get candidates from the general part in the sdp */
-int krx_sdp_get_media_candidates(krx_sdp* k, krx_sdp_media* m, int nmedia, krx_sdp_candidate* out, int ntotal); /* get candidates from a specific media element */
+int krx_sdp_get_media_fingerprint(krx_sdp* k, krx_sdp_media* m, char* out, int nbytes);                         /* get the fingerprint for the media that is used for dtls */
 int krx_sdp_print_candidate(krx_sdp_candidate* c);                                                              /* print some verbose info about the given candidate */
-int krx_sdp_shutdown(krx_sdp* k);                                                                               /* cleanup + free the krx_sdp */
+
+int krx_sdp_media_to_string(krx_sdp* k, krx_sdp_media* m, char* out, int nbytes);
+
+/* generating */
+krx_sdp_line* krx_sdp_line_alloc(const char* line);                                                             /* very simplistic but easy way to generate a SDP, just add lines */
+int krx_sdp_add_line(krx_sdp* k, const char* line);                                                             /* add a new line */
+int krx_sdp_add_media(krx_sdp* dest, krx_sdp* src, krx_sdp_media* m);
+
+int krx_sdp_print(krx_sdp* k, char* out, int nbytes);                                                           /* print the lines of the given krx_sdp into the buffer */
 
 const char* krx_sdp_candidate_type_to_string(krx_sdp_candidate_type type);
 const char* krx_sdp_transport_type_to_string(krx_sdp_transport_type type);
@@ -131,9 +152,7 @@ const char* krx_sdp_transport_type_to_string(krx_sdp_transport_type type);
   a=ssrc:2050584804 msid:BfXlgpFTeJeijYiI0gub1fNwTHtKTMGIceh0 e445c1fd-33ca-4075-9bb9-e8d2938b1186
   a=ssrc:2050584804 mslabel:BfXlgpFTeJeijYiI0gub1fNwTHtKTMGIceh0
   a=ssrc:2050584804 label:e445c1fd-33ca-4075-9bb9-e8d2938b1186
-  
   ----
-
   v=0
   o=Mozilla-SIPUA-29.0 9417 0 IN IP4 0.0.0.0
   s=SIP Call

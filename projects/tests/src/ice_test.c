@@ -6,7 +6,7 @@
 #include "krx_global.h"
 
 #define USE_SDP 1
-#define USE_ICE 0
+#define USE_ICE 1
 
 // #if USE_SDP && USE_ICE
 // #   error Cannot use both SDP and ICE at the same for now. @todo we need to create a global init/shutdown function
@@ -27,11 +27,13 @@ int main() {
   }
 
 #if USE_SDP
+
   /* load example SDP */
   krx_sdp sdp;
   char ice_ufrag[512];
   char ice_pwd[512];
   char buf[8192];
+  char fingerprint[512];
 
   int nbytes = read_file("sdp.txt", buf, sizeof(buf));
   if(nbytes < 0) {
@@ -67,6 +69,13 @@ int main() {
         exit(1);
       }
     }
+
+    if(krx_sdp_get_media_fingerprint(&sdp, sdp_video, fingerprint, sizeof(fingerprint)) < 0) {
+      if(krx_sdp_get_fingerprint(&sdp, fingerprint, sizeof(fingerprint)) < 0) {
+        printf("Error: cannot get fingerprint from sdp.\n");
+        exit(1);
+      }
+    }
   }
 
   /* get candidates, first for video, then from general part if not found */
@@ -78,12 +87,36 @@ int main() {
     }
   }
 
-  if(krx_sdp_shutdown(&sdp) < 0) {
-    exit(1);
-  };
-
+  printf("\n\n");
   printf("ice-ufrag: %s\n", ice_ufrag);
   printf("ice-pwd: %s\n", ice_pwd);
+  printf("fingerprint: %s\n", fingerprint);
+  printf("\n\n");
+
+  /* create answer */
+  krx_sdp asdp;
+  if(krx_sdp_init(&asdp) < 0) {
+    exit(0);
+  }
+
+
+  char media_lines[1024];
+  krx_sdp_media_to_string(&sdp, sdp_video, media_lines, sizeof(media_lines));
+  printf(">>> %s\n", media_lines);
+
+  // krx_sdp_add_line(&asdp, media_lines);
+  krx_sdp_add_line(&asdp, "v=0");
+  krx_sdp_add_line(&asdp, "a=rtpmap:97");
+  krx_sdp_add_line(&asdp, "a=rtpmap:97");
+
+  char answer[4096 * 4];
+  int n = krx_sdp_print(&asdp, answer, sizeof(answer));
+  printf("\n%s\n", answer);
+
+  /* cleanup */
+  krx_sdp_deinit(&sdp);
+  krx_sdp_deinit(&asdp);
+
 #endif 
 
 #if USE_ICE  
@@ -97,6 +130,12 @@ int main() {
   if(krx_ice_set_stun_server(&ice, "stun.l.google.com", 19302) < 0) {
     exit(1);
   }
+
+#if USE_SDP
+  if(krx_ice_set_credentials(&ice, ice_ufrag, ice_pwd) < 0) {
+    exit(1);
+  }
+#endif  
 
   if(krx_ice_start(&ice) < 0) {
     exit(1);

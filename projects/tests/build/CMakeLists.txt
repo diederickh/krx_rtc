@@ -11,6 +11,7 @@ set(use_signal_server FALSE)
 set(use_udp_server FALSE)
 set(use_stun_test FALSE)
 set(use_ice_test TRUE)
+set(use_test_ice TRUE) # custom parser
 set(use_pjsip_sdp_test TRUE)
 
 include_directories(
@@ -52,6 +53,13 @@ if(use_ice_test)
     ${bd}/../src/krx_ice_pjnath.c
     ${bd}/../src/krx_sdp.c
     ${bd}/../src/krx_global.c
+    )
+endif()
+
+if(use_test_ice)
+  add_executable(test_ice
+    ${bd}/../src/test_rx_sdp.c
+    ${bd}/../src/rx_sdp.c
     )
 endif()
 
@@ -116,10 +124,15 @@ if(use_stun_test)
   install(TARGETS stun_test DESTINATION bin)
 endif()
  
-
 if(use_ice_test)
   target_link_libraries(ice_test ${libraries})
   install(TARGETS ice_test DESTINATION bin)
+endif()
+
+# own sdp parser
+if(use_test_ice)
+  target_link_libraries(test_ice ${libraries})
+  install(TARGETS test_ice DESTINATION bin)
 endif()
  
 if(use_pjsip_sdp_test) 

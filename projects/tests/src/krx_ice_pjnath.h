@@ -4,6 +4,9 @@
 
   Using PJNATH with the pjnath build in transport support.
 
+  References:
+  -----------
+  - create unique string: https://code.google.com/p/csipsimple/source/browse/trunk/pjsip_android/apps/pjsip/project/pjnath/src/pjnath-test/ice_test.c?spec=svn860&r=860
  */
 #ifndef KRX_ICE_PJNATH
 #define KRX_ICE_PJNATH
@@ -36,12 +39,17 @@ struct krx_ice {
   pj_ice_strans* ice_st;
   pj_ice_strans_cb ice_cb;
   pj_thread_t* thread;
+
+  /* sdp info */
+  char* ice_ufrag;
+  char* ice_pwd;
 };
 
 int krx_ice_init(krx_ice* k);
 int krx_ice_start(krx_ice* k);
 int krx_ice_set_stun_server(krx_ice* k, char* addr, unsigned int port);
 int krx_ice_set_credentials(krx_ice* k, const char* username, const char* password);
+int krx_ice_start_session(krx_ice* k);
 int krx_ice_shutdown(krx_ice* k);
 
 #endif

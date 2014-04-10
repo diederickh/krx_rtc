@@ -1,4 +1,5 @@
 #include "krx_ice_pjnath.h"
+#include <pjnath/ice_strans.h>
 
 /* --------------------------------------------------------------------------- */
 
@@ -6,6 +7,7 @@ static int krx_ice_worker_thread(void* user);
 static pj_status_t krx_ice_handle_events(krx_ice* k, unsigned int maxms, unsigned int* pcount);
 static void krx_ice_on_rx_data(pj_ice_strans* icest, unsigned int compid, void* pkt, pj_size_t size, const pj_sockaddr_t* saddr, unsigned int saddrlen);
 static void krx_ice_on_complete(pj_ice_strans* icest, pj_ice_strans_op op, pj_status_t status);
+static int krx_ice_candidate_to_string(char* out, int nbytes, pj_ice_sess_cand* cand);
                               
 /* --------------------------------------------------------------------------- */
 
@@ -61,13 +63,17 @@ int krx_ice_init(krx_ice* k) {
   k->ice_cfg.opt.aggressive = PJ_FALSE; /* @todo(roxlu): read up the aggressive flag in ice_cfg. */
   
   /* default configs */
-  k->max_hosts = 2;
-  k->ncomp = 2;
+  k->max_hosts = 4;
+  k->ncomp = 4;
  
   /* initialize the callbacks */
   pj_bzero(&k->ice_cb, sizeof(k->ice_cb));
   k->ice_cb.on_rx_data = krx_ice_on_rx_data;
   k->ice_cb.on_ice_complete = krx_ice_on_complete;
+
+  /* sdp info */
+  k->ice_ufrag = NULL;
+  k->ice_pwd = NULL;
 
   return 0;
 }
@@ -76,9 +82,7 @@ int krx_ice_start(krx_ice* k) {
 
   pj_status_t r;
 
-  if(!k) {
-    return -1;
-  }
+  if(!k) { return -1;  }
 
   /* use specific stun server? */
   if(k->stun_server_addr.slen) {
@@ -93,7 +97,7 @@ int krx_ice_start(krx_ice* k) {
   }
 
   /* @todo(roxlu):  add turn features for ice */
-  
+
   /* create the instance */
   r = pj_ice_strans_create("krx_ice_pjnath", 
                            &k->ice_cfg,
@@ -107,11 +111,108 @@ int krx_ice_start(krx_ice* k) {
   return 0;
 }
 
+int krx_ice_start_session(krx_ice* k) {
+
+  pj_status_t r;
+
+  if(!k) { return - 1; } 
+  if(!k->ice_st) { return -2; } 
+
+  if(pj_ice_strans_has_sess(k->ice_st)) {
+    printf("Error: ice already has a session.\n");
+    return -3;
+  }
+
+  
+  r = pj_ice_strans_init_ice(k->ice_st, PJ_ICE_SESS_ROLE_CONTROLLED, NULL, NULL);
+  if(r != PJ_SUCCESS) {
+    printf("Error: cannot initialize an ice session.\n");
+    return -4;
+  }
+
+  /* this is where we can create an sdp */
+  char sdp_buf[8096] = { 0 } ;
+  sprintf(sdp_buf,
+          "v=0\n" 
+          "o=- 123456789 34234324 IN IP4 localhost\n"    /* - [identifier] [session version] IN IP4 localhost */
+          "s=krx_ice\n"                                  /* software */
+          "t=0 0\n"                                      /* start, ending time */
+          "a=ice-ufrag:%s\n"
+          "a=ice-pwd:%s\n"
+          ,
+          k->ice_ufrag,
+          k->ice_pwd
+  );
+
+  /* write each component */
+  for(int i = 0; i < k->ncomp; ++i) {
+
+    pj_ice_sess_cand cand[PJ_ICE_ST_MAX_CAND] = { 0 } ;
+    char ipaddr[PJ_INET6_ADDRSTRLEN] = { 0 } ;
+
+    /* get default candidate for component, note that compoments start numbering from 1, not zero. */
+    r = pj_ice_strans_get_def_cand(k->ice_st, 1, &cand[0]);
+    if(r != PJ_SUCCESS) {
+      printf("Error: cannot retrieve default candidate for component: %d\n", i+1);
+      continue;
+    }
+
+    if(i == 0) {
+      int offset = strlen(sdp_buf);
+      sprintf(sdp_buf + offset, 
+              "m=video %d RTP/SAVPF 120\n"
+              "c=IN IP4 %s\n"
+              ,
+              (int)pj_sockaddr_get_port(&cand[0].addr),
+              pj_sockaddr_print(&cand[0].addr, ipaddr, sizeof(ipaddr), 0)              
+      );
+
+      /* print all candidates */
+      unsigned num_cands = PJ_ARRAY_SIZE(cand);
+      printf("Found number of candidates: %d\n", num_cands);      
+
+      // (ice_st && ice_st->ice && comp_id && comp_id <= ice_st->comp_cnt && count && cand),
+      printf("ice: %p\n", k->ice_st);
+      r = pj_ice_strans_enum_cands(k->ice_st, i + 1, &num_cands, cand);
+      if(r != PJ_SUCCESS) {
+        printf("Error: cannot retrieve candidates.\n");
+        exit(1);
+      }
+
+
+#if 1
+
+      for(int j = 0; j < num_cands; ++j) {
+        int offset = strlen(sdp_buf);
+        char* start_addr = sdp_buf + offset;
+        krx_ice_candidate_to_string(sdp_buf, sizeof(sdp_buf)-offset, &cand[j]);
+        char* end_addr = sdp_buf + strlen(sdp_buf);
+        printf("--------\n%s\n--------------\n", sdp_buf);
+      }
+
+      offset = strlen(sdp_buf);
+      char* start_addr = sdp_buf + offset;
+      krx_ice_candidate_to_string(sdp_buf + offset, sizeof(sdp_buf)-offset, &cand[1]);
+      char* end_addr = sdp_buf + strlen(sdp_buf);
+#endif
+    }
+
+
+  }
+
+
+  printf("SDP: %s\n", sdp_buf);
+          
+
+  r = pj_ice_strans_init_ice(k->ice_st, PJ_ICE_SESS_ROLE_CONTROLLED, NULL, NULL);
+  CHECK_PJ_STATUS(r, "Error: cannot init ice session.\n", -4);
+
+  return 0;
+}
+
 int krx_ice_set_stun_server(krx_ice* k, char* addr, unsigned int port) {
 
-  if(!k) {
-    return -1;
-  }
+  if(!k) { return -1;  }
 
   if(!addr) {
     printf("Error: invalid stun server ip.\n");
@@ -138,13 +239,30 @@ int krx_ice_set_credentials(krx_ice* k, const char* username, const char* passwo
     return -3;
   }
 
+  k->ice_ufrag = (char*)malloc(strlen(username) + 1);
+  k->ice_pwd = (char*)malloc(strlen(password) + 1);
+
+  memcpy(k->ice_ufrag, username, strlen(username));
+  memcpy(k->ice_pwd, password, strlen(password));
+
+  k->ice_ufrag[strlen(username)+1] = '\0';           /* @todo(roxlu) is this a correct way to copy the username to ice? */
+  k->ice_pwd[strlen(password)+1] = '\0';             /* @todo(roxlu) is this correct way to copy the username to ice?? */
+
   return 0;
 }
 
 int krx_ice_shutdown(krx_ice* k) {
 
-  if(!k) {
-    return -1;
+  if(!k) { return -1; }
+
+  if(k->ice_ufrag) {
+    free(k->ice_ufrag);
+    k->ice_ufrag = NULL;
+  }
+
+  if(k->ice_pwd) {
+    free(k->ice_pwd);
+    k->ice_pwd = NULL;
   }
 
   return 0;
@@ -245,5 +363,36 @@ static void krx_ice_on_complete(pj_ice_strans* icest,
                                     pj_ice_strans_op op, 
                                     pj_status_t status) 
 {
-  printf("ice complete.\n");
+  printf("----------------- ice complete -------------------------- \n");
+  krx_ice* k = (krx_ice*)pj_ice_strans_get_user_data(icest);
+  if(!k) {
+    printf("Error: complete but no krx_ice* user data found.\n");
+    return;
+  }
+
+  krx_ice_start_session(k);
+}
+
+static int krx_ice_candidate_to_string(char* out, int nbytes, pj_ice_sess_cand* cand) {
+
+  if(!out) { return -1; }
+  if(!nbytes) { return 2; } 
+  if(!cand) { return -3; } 
+
+  char ipaddr[PJ_INET6_ADDRSTRLEN];
+  #if 0
+  /* @todo(roxlu): make sure we don't overflow the out buffer in krx_ice_candidate_to_string() */
+  sprintf(out,
+          "a=candidate:%.*s %u UDP %u %s %u type %s\n",
+          (int)cand->foundation.slen, cand->foundation.ptr,            /* foundation */
+          (unsigned)cand->comp_id,                                     /* component id */
+          cand->prio,                                                  /* priority */
+        "address",
+        //        pj_sockaddr_print(&cand->addr, ipaddr, sizeof(ipaddr), 0),   /* socket address */
+        // (unsigned)pj_sockaddr_get_port(&cand->addr),
+          pj_ice_get_cand_type_name(cand->type)
+  );
+  #endif
+          
+  return nbytes;
 }
