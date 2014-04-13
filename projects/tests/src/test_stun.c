@@ -76,6 +76,12 @@ int main() {
       printf("++ map: %d\n", map->type);
       map = map->next;
     }
+
+    krx_sdp_candidate* cand = medias->candidates;
+    while(cand) {
+      printf("@@ cand: %s\n", cand->addr);
+      cand = cand->next;
+    }
     medias = medias->next;
   }
   exit(0);

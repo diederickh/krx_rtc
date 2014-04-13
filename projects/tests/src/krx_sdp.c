@@ -77,6 +77,7 @@ krx_sdp_media* krx_sdp_media_alloc() {
   m->next = NULL;
   m->rtpmap = NULL;
   m->attributes = NULL;
+  m->candidates = NULL;
 
   return m;
 }
@@ -229,13 +230,6 @@ int krx_sdp_parse(krx_sdp* k, char* buf, int nbytes) {
   return 0;
 }
 
-/*
-int krx_sdp_parse_candidate(krx_sdp* sdp, char* value, krx_sdp_candidate** candidate) {
-  printf("Parse canidate: %s\n", value);
-  return 0;
-}
-*/
-
 /* STATIC */
 /* ------------------------------------------------------------------------ */
 
@@ -365,6 +359,48 @@ static void parse_attribute(krx_sdp* sdp, char* line, krx_sdp_attribute** attr) 
   if(krx_stricmp(name, "candidate") == 0) {
     krx_sdp_candidate* cand = NULL;
     parse_candidate(sdp, line, &cand); 
+
+    if(cand) {
+      /* append the candidate to the last media */
+      krx_sdp_media* media = sdp->media;
+      while(media) {
+        if(!media->next) {
+          break;
+        }
+        media = media->next;
+      }
+
+      /* shouldn't happen */
+      if(!media) {
+        printf("Error: parsing an candidate but we haven't found a media element.\n");
+        exit(1);
+      }
+
+      if(!media->candidates) {
+        /* first candidate */
+        media->candidates = cand;
+      }
+      else {
+        /* append to last one. */
+        krx_sdp_candidate* last_cand = media->candidates;
+        while(last_cand) {
+          if(!last_cand->next) {
+            break;
+          }
+          last_cand = last_cand->next;
+        }
+
+        if(!last_cand) {
+          /* shouldn't happen */
+          printf("Error: cannot find the last candidate.\n");
+          exit(1);
+        }
+        
+        /* and set the new one to the end. */
+        last_cand->next = cand;
+      }
+    }
+    
     /* @todo(roxlu): append the new candidate to the last media */
   }
   else {
