@@ -53,8 +53,9 @@ int main() {
   }
 
   printf("\n--------\n%s\n-----------\n", sdp_buf);
-
+  printf("________ SDP pointer in stun: %p\n", sdp->sdp);
   krx_sdp_parse(sdp, sdp_buf, strlen(sdp_buf) + 1);
+  printf("________ SDP pointer in stun: %p, SDP: %p\n", sdp->sdp, sdp);
   krx_sdp_attribute* attr = sdp->attributes;
 
   printf("Parsed SDP\n");
@@ -66,11 +67,13 @@ int main() {
   krx_sdp_media* medias = sdp->media;
   while(medias) {
     printf("Media: %d\n", medias->port);
+
     attr = medias->attributes;
     while(attr) {
       printf("-- %s: %s\n", attr->name, attr->name);
       attr = attr->next;
     }
+
     krx_sdp_rtpmap* map = medias->rtpmap;
     while(map) {
       printf("++ map: %d\n", map->type);
@@ -82,8 +85,15 @@ int main() {
       printf("@@ cand: %s\n", cand->addr);
       cand = cand->next;
     }
+
+
     medias = medias->next;
   }
+
+  char out[4096];
+  krx_sdp_print(sdp, out, sizeof(out));
+
+  krx_sdp_dealloc(sdp);
   exit(0);
 #endif
 

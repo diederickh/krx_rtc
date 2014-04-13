@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 
 typedef struct krx_sdp krx_sdp;
 typedef struct krx_sdp_media krx_sdp_media;
@@ -129,7 +130,7 @@ struct krx_sdp {
   krx_sdp_attribute** curr_attr;                /* the attribute list that we need to append to */
 };
 
-/* memory management */
+/* allocate krx_sdp_* types */
 krx_sdp* krx_sdp_alloc();
 krx_sdp_media* krx_sdp_media_alloc();
 krx_sdp_origin* krx_sdp_origin_alloc();
@@ -138,13 +139,30 @@ krx_sdp_attribute* krx_sdp_attribute_alloc();
 krx_sdp_rtpmap* krx_sdp_rtpmap_alloc();
 krx_sdp_candidate* krx_sdp_candidate_alloc();
 
+/* deallocate krx_sdp_* types; these also nicely cleanup the members of the types. */
 void krx_sdp_dealloc(krx_sdp* sdp);
+void krx_sdp_media_dealloc(krx_sdp_media* m);
+void krx_sdp_origin_dealloc(krx_sdp_origin* o);
+void krx_sdp_connection_dealloc(krx_sdp_connection* conn);
+void krx_sdp_candidate_dealloc(krx_sdp_candidate* cand);
+void krx_sdp_rtpmap_dealloc(krx_sdp_rtpmap* map);
+void krx_sdp_attribute_dealloc(krx_sdp_attribute* attr);
 
-/* parsing */
+/* parsing and manipulating */
 int krx_sdp_parse(krx_sdp* sdp, char* buf, int nbytes);
+int krx_sdp_remove_candidates(krx_sdp_media* m);       /* removes and deallocs all candidats from the given media */
 
-/* generating */
-int krx_sdp_add_media(krx_sdp* sdp, krx_sdp_media* m);
+int krx_sdp_add_media(krx_sdp* sdp, krx_sdp_media* m); /* @todo(roxlu): test krx_sdp_add_media */
+int krx_sdp_media_to_string(krx_sdp_media* m, char* buf, int nbytes); /* @todo(roxlu): media_to_string, check size. */
+int krx_sdp_attributes_to_string(krx_sdp_attribute* a, char* buf, int nbytes); /* @todo(roxlu): attributes_to_string, check size. */
+int krx_sdp_candidates_to_string(krx_sdp_candidate* c, char* buf, int nbytes); /* @todo(roxlu): candidates_to_string, check size. */
+char* krx_sdp_media_type_to_string(krx_sdp_media_type type);
+char* krx_sdp_proto_type_to_string(krx_sdp_proto proto);
+char* krx_sdp_transport_type_to_string(krx_sdp_transport_type trans);
+char* krx_sdp_candidate_type_to_string(krx_sdp_candidate_type type);
+
+
+int krx_sdp_print(krx_sdp* sdp, char* buf, int nbytes);
 
 /*
 

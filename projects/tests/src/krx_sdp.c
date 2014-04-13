@@ -45,17 +45,113 @@ krx_sdp* krx_sdp_alloc() {
   return k;
 }
 
+void krx_sdp_media_dealloc(krx_sdp_media* m) {
+  krx_sdp_media* medias = m;
+  while(medias) {
+    krx_sdp_media* next = medias->next;
+
+    /* cleanup members */
+    krx_sdp_attribute_dealloc(medias->attributes);
+    krx_sdp_rtpmap_dealloc(medias->rtpmap);
+    krx_sdp_candidate_dealloc(medias->candidates);
+
+    /* nicely clean up */
+    medias->attributes = NULL;
+    medias->rtpmap = NULL;
+    medias->candidates = NULL;
+    medias->port = 0;
+    medias->num_ports = 0;
+    medias->proto = SDP_PROTO_NONE;
+    medias->type = SDP_MEDIA_TYPE_NONE;
+    medias->next = NULL;
+    
+    free(medias);
+    medias = next;
+  }
+}
+
+void krx_sdp_origin_dealloc(krx_sdp_origin* o) {
+  o->username = NULL;
+  o->sess_id = 0;
+  o->sess_version = 0;
+  o->net_type = SDP_NET_NONE;
+  o->addr_type = SDP_ADDR_NONE;
+
+  krx_sdp_connection_dealloc(o->address);
+
+  free(o);
+}
+
+void krx_sdp_connection_dealloc(krx_sdp_connection* conn) {
+  conn->net_type = SDP_NET_NONE;
+  conn->addr_type = SDP_ADDR_NONE;
+  conn->address = NULL;
+  conn->ttl = 0;
+  conn->is_multi_cast = 0;
+  conn->num_groups = 0;
+}
+
+void krx_sdp_candidate_dealloc(krx_sdp_candidate* cand) {
+  krx_sdp_candidate* cands = cand;
+  while(cands) {
+    krx_sdp_candidate* next = cands->next;
+
+    /* nicly cleanup mem */
+    cands->foundation = NULL;
+    cands->component_id = 0;
+    cands->transport = SDP_TRANSPORT_NONE;
+    cands->priority = 0;
+    cands->addr =  NULL;
+    cands->port = 0;
+    cands->raddr = NULL;
+    cands->rport = 0;
+    cands->type = SDP_CANDIDATE_TYPE_NONE;
+    cands->next = NULL;
+
+    free(cands);
+    cands = next;
+  }
+}
+
+void krx_sdp_rtpmap_dealloc(krx_sdp_rtpmap* map) {
+  krx_sdp_rtpmap* maps = map;
+  while(maps) {
+    krx_sdp_rtpmap* next = maps->next;
+    maps->type = 0;
+    maps->next = NULL;
+    free(maps);
+    maps = next;
+  }
+}
+
+void krx_sdp_attribute_dealloc(krx_sdp_attribute* attribs) {
+  krx_sdp_attribute* attr = attribs;
+  while(attr) {
+    krx_sdp_attribute* next = attr->next;
+    attr->name = NULL;
+    attr->value = NULL;
+    attr->next = NULL;
+    free(attr); 
+    attr = next;
+  }
+}
 
 void krx_sdp_dealloc(krx_sdp* sdp) {
 
   if(!sdp) { return; } 
 
+
+  krx_sdp_attribute_dealloc(sdp->attributes);
+  krx_sdp_media_dealloc(sdp->media);
+
+  /* free our copy of the sdp string */
+  /* @todo(roxlu): why does freeing of krx_sdp.sdp says that the memory isn't allocated? */
+  /*
   if(sdp->sdp) {
     free(sdp->sdp);
     sdp->sdp = NULL;
   }
-
-  /* @todo(roxlu): krx_sdp_dealloc(), make sure to free all allocated mem here. */
+  */
 
   free(sdp);
   sdp = NULL;
@@ -207,6 +303,7 @@ int krx_sdp_parse(krx_sdp* k, char* buf, int nbytes) {
   k->sdp = (char*)malloc(nbytes);
   if(!k->sdp) { return -6; } 
   memcpy(k->sdp, buf, nbytes);
+
   
   char* line = NULL; 
   do { 
@@ -228,6 +325,204 @@ int krx_sdp_parse(krx_sdp* k, char* buf, int nbytes) {
   } while(line);
 
   return 0;
+}
+
+int krx_sdp_remove_candidates(krx_sdp_media* m) {
+
+  if(!m) { return -1; } 
+
+  krx_sdp_candidate_dealloc(m->candidates);
+
+  m->candidates = NULL;
+
+  return 0;
+}
+
+int krx_sdp_print(krx_sdp* sdp, char* buf, int nbytes) {
+  if(!sdp) { return -1; } 
+  if(!buf) { return -2; } 
+  if(!nbytes) { return -3; } 
+
+  /* @todo(roxlu): krx_sdp_print(), calculat the needed size before writing */
+  int pos = 0;
+  sprintf(buf + pos, "%s", "v=0\r\n");                                                pos = strlen(buf);
+  sprintf(buf + pos, "o=krx_rtc %llu 0 IN IP 0.0.0.0\r\n", (uint64_t)time(NULL));     pos = strlen(buf);
+  sprintf(buf + pos, "t=0 0\r\n");                                                    pos = strlen(buf);
+
+  /* @todo(roxlu): krx_sdp_print(), let user add an origin field. */
+  sprintf(buf + pos, "c=IN IP4 84.105.186.141\r\n");                                  pos = strlen(buf);
+
+  krx_sdp_media* m = sdp->media;
+  while(m) {
+
+    /* media */
+    pos = strlen(buf);
+    krx_sdp_media_to_string(m, buf + pos, nbytes);
+
+    /* attributes of media */
+    pos = strlen(buf);
+    krx_sdp_attributes_to_string(m->attributes, buf + pos, nbytes);
+
+    /* candidates of media */
+    pos = strlen(buf);
+    krx_sdp_candidates_to_string(m->candidates, buf + pos, nbytes); 
+
+    m = m->next;
+  }
+
+  printf("----\n%s\n----\n", buf);
+
+  return 0;
+}
+
+/* e.g. m=video 32291 RTP/SAVPF 100 116 117 */
+int krx_sdp_media_to_string(krx_sdp_media* m, char* buf, int nbytes) {
+
+  int pos = 0;
+
+  /* type */
+  sprintf(buf, "m=%s ", krx_sdp_media_type_to_string(m->type));
+  pos = strlen(buf);
+
+  /* port */
+  sprintf(buf + pos, "%u", m->port);
+  pos = strlen(buf);
+
+  /* num ports */
+  if(m->num_ports) {
+    sprintf(buf + pos, "/%u", m->num_ports);
+    pos = strlen(buf);
+  }
+
+  /* proto */
+  sprintf(buf + pos, " %s ", krx_sdp_proto_type_to_string(m->proto));
+
+  /* fmt */
+  krx_sdp_rtpmap* maps = m->rtpmap;
+  while(maps) {
+
+    pos = strlen(buf);
+    sprintf(buf + pos, "%u", maps->type);
+
+    /* add a space .. */
+    if(maps->next) {
+      pos = strlen(buf);      
+      sprintf(buf + pos, " ");
+    }
+
+    maps = maps->next;
+  }
+
+  pos = strlen(buf);
+  sprintf(buf + pos, "\r\n");
+
+  return 0;
+}
+
+int krx_sdp_attributes_to_string(krx_sdp_attribute* a, char* buf, int nbytes) {
+
+  int pos = 0;
+  krx_sdp_attribute* attr = a;
+
+  while(attr) {
+
+    if(strlen(attr->value)) {
+      /* val = value pair. */
+      sprintf(buf + pos, "a=%s:%s\r\n", attr->name, attr->value);    
+    }
+    else {
+      /* only a flag */
+      sprintf(buf + pos, "a=%s\r\n", attr->name);
+    }
+
+    pos = strlen(buf);
+    attr = attr->next;
+  }
+  return 0;
+}
+
+/* url: https://tools.ietf.org/html/rfc5245#section-15.1 */
+/* e.g. a=candidate:2083896148 1 udp 1845501695 84.105.186.141 32291 typ srflx raddr 192.168.0.194 rport 60607 */
+int krx_sdp_candidates_to_string(krx_sdp_candidate* c, char* buf, int nbytes) {
+
+  int pos = 0;
+  krx_sdp_candidate* cand = c;
+
+  while(cand) {
+
+    /* default candidate string */
+    sprintf(buf + pos, "a=candidate:%s %u %s %llu %s %u typ %s",
+            cand->foundation,
+            cand->component_id,
+            krx_sdp_transport_type_to_string(cand->transport),
+            cand->priority,
+            cand->addr,
+            cand->port,
+            krx_sdp_candidate_type_to_string(cand->type)
+    );
+
+    if(cand->type == SDP_SRFLX) {
+      pos = strlen(buf);
+      sprintf(buf + pos, " raddr %s rport %u", 
+              cand->raddr,
+              cand->rport
+      );
+
+      /* @todo(roxlu): krx_sdp_candidates_to_string(), add other host types. */
+
+    }
+    
+    pos = strlen(buf);
+    sprintf(buf + pos, "\r\n");
+
+    pos = strlen(buf);
+    cand = cand->next;
+  }
+  return 0;
+}
+
+char* krx_sdp_candidate_type_to_string(krx_sdp_candidate_type type) {
+  switch(type) {
+    case SDP_HOST: { return "host"; } 
+    case SDP_SRFLX: { return "srflx"; } 
+    case SDP_PRFLX: { return "prflx"; } 
+    case SDP_RELAY: { return "relay"; } 
+    case SDP_CANDIDATE_TYPE_NONE: 
+    default: {
+      return "unknown-canidate-type";
+    }
+  }
+}
+
+char* krx_sdp_media_type_to_string(krx_sdp_media_type type) {
+  switch(type) {
+    case SDP_VIDEO: { return "video"; } 
+    case SDP_AUDIO: { return "audio"; } 
+    case SDP_MEDIA_TYPE_NONE: 
+    default: { 
+      return "unknown-media-type";
+    }
+  };
+}
+
+char* krx_sdp_proto_type_to_string(krx_sdp_proto proto) {
+  switch(proto) {
+    case SDP_UDP_RTP_SAVPF: { return "RTP/SAVPF"; } 
+    case SDP_PROTO_NONE:
+    default: {
+      return "unknown-proto-type";
+    }
+  }
+}
+
+char* krx_sdp_transport_type_to_string(krx_sdp_transport_type trans) {
+  switch(trans) {
+    case SDP_UDP: { return "UDP"; } 
+    case SDP_TCP: { return "TCP"; } 
+    default: {
+      return "unknown-transport-type";
+    }
+  }
 }
 
 /* STATIC */
