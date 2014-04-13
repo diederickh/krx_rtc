@@ -18,18 +18,56 @@ typedef struct krx_sdp krx_sdp;
 typedef struct krx_sdp_media krx_sdp_media;
 typedef struct krx_sdp_origin krx_sdp_origin;
 typedef struct krx_sdp_connection krx_sdp_connection;
+typedef struct krx_sdp_attribute krx_sdp_attribute;
+typedef struct krx_sdp_candidate krx_sdp_candidate;
+typedef struct krx_sdp_rtpmap krx_sdp_rtpmap;
 typedef enum krx_sdp_nettype krx_sdp_nettype;
 typedef enum krx_sdp_addrtype krx_sdp_addrtype;
+typedef enum krx_sdp_proto krx_sdp_proto;
+typedef enum krx_sdp_media_type krx_sdp_media_type;
+typedef enum krx_sdp_candidate_type krx_sdp_candidate_type;
+typedef enum krx_sdp_transport_type krx_sdp_transport_type;
 
 enum krx_sdp_nettype {
   SDP_NET_NONE = 0,
-  SDP_NET_IN            /* The one and only internet */
+  SDP_NET_IN,            /* The one and only internet */
 };
 
 enum krx_sdp_addrtype { 
   SDP_ADDR_NONE = 0,
   SDP_IP4, 
-  SDP_IP6
+  SDP_IP6,
+};
+
+enum krx_sdp_transport_type {
+  SDP_TRANSPORT_NONE = 0,
+  SDP_TCP,
+  SDP_UDP,
+};
+
+enum krx_sdp_proto {
+  SDP_PROTO_NONE = 0,
+  SDP_UDP_RTP_SAVPF,
+};
+
+enum krx_sdp_media_type {
+  SDP_MEDIA_TYPE_NONE = 0,
+  SDP_VIDEO,
+  SDP_AUDIO, 
+};
+
+enum krx_sdp_candidate_type {
+  SDP_CANDIDATE_TYPE_NONE = 0,
+  SDP_HOST,
+  SDP_SRFLX,
+  SDP_PRFLX,
+  SDP_RELAY,
+};
+
+struct krx_sdp_attribute {
+  char* name;
+  char* value;
+  krx_sdp_attribute* next;
 };
 
 struct krx_sdp_connection { 
@@ -50,17 +88,45 @@ struct krx_sdp_origin {
   krx_sdp_connection *address;
 };
 
+struct krx_sdp_candidate {
+  char* foundation;
+  uint32_t component_id;
+  krx_sdp_transport_type transport;  
+  uint64_t priority;
+  char* addr;
+  uint32_t port;
+  char* raddr;
+  uint32_t rport;
+  krx_sdp_candidate_type type;
+  krx_sdp_candidate* next;
+};
+
+struct krx_sdp_rtpmap {
+  uint32_t type;
+  krx_sdp_rtpmap* next;
+};
+
 struct krx_sdp_media { 
+  uint16_t port;
+  uint8_t num_ports;
+  krx_sdp_proto proto;
+  krx_sdp_media_type type;
+  krx_sdp_attribute* attributes;
+  krx_sdp_rtpmap* rtpmap;
+  krx_sdp_candidate* candidates;
   krx_sdp_media* next;
 };
 
 struct krx_sdp { 
-  char* sdp;                                     /* the buffer which is passed to krx_sdp_parse; we copy it. */
+  char* sdp;                                    /* the buffer which is passed to krx_sdp_parse; we copy it. */
   char* version;
   krx_sdp_origin* origin;
   krx_sdp_media* media;
-  
-  uint8_t has_parse_error;
+  krx_sdp_attribute* attributes;
+
+  /* parse specific */
+  uint8_t has_parse_error;                      /* is set to 1 when something goes wrong with parseing */
+  krx_sdp_attribute** curr_attr;                /* the attribute list that we need to append to */
 };
 
 /* memory management */
@@ -68,6 +134,9 @@ krx_sdp* krx_sdp_alloc();
 krx_sdp_media* krx_sdp_media_alloc();
 krx_sdp_origin* krx_sdp_origin_alloc();
 krx_sdp_connection* krx_sdp_connection_alloc();
+krx_sdp_attribute* krx_sdp_attribute_alloc();
+krx_sdp_rtpmap* krx_sdp_rtpmap_alloc();
+krx_sdp_candidate* krx_sdp_candidate_alloc();
 
 void krx_sdp_dealloc(krx_sdp* sdp);
 

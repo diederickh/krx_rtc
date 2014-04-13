@@ -47,14 +47,6 @@ int main() {
     exit(1);
   } 
 
-  krx_sdp_media* media = krx_sdp_media_alloc();
-  if(!media) {
-    printf("Error: invalid media.\n");
-    exit(1);
-  }
-
-  krx_sdp_add_media(sdp, media);
-
   char sdp_buf[8192];
   if(krx_read_file("./sdp.txt", sdp_buf, sizeof(sdp_buf)) < 0) {
     exit(1);
@@ -63,7 +55,29 @@ int main() {
   printf("\n--------\n%s\n-----------\n", sdp_buf);
 
   krx_sdp_parse(sdp, sdp_buf, strlen(sdp_buf) + 1);
+  krx_sdp_attribute* attr = sdp->attributes;
 
+  printf("Parsed SDP\n");
+  while(attr) {
+    printf("--%s = %s\n", attr->name, attr->value);
+    attr = attr->next;
+  }
+
+  krx_sdp_media* medias = sdp->media;
+  while(medias) {
+    printf("Media: %d\n", medias->port);
+    attr = medias->attributes;
+    while(attr) {
+      printf("-- %s: %s\n", attr->name, attr->name);
+      attr = attr->next;
+    }
+    krx_sdp_rtpmap* map = medias->rtpmap;
+    while(map) {
+      printf("++ map: %d\n", map->type);
+      map = map->next;
+    }
+    medias = medias->next;
+  }
   exit(0);
 #endif
 

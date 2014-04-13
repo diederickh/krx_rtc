@@ -8,9 +8,7 @@
 #define ALPHA "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 #define DIGIT "0123456789"
 #define TOKEN ALPHA DIGIT "-!#$%&'*+.^_`{|}~"
-
-#define PARSE_ERROR(sdp, msg) { printf("Error: %s", msg); sdp->has_parse_error = 1; } 
-
+#define PARSE_ERROR(sdp, msg) { printf("Error: %s\n", msg); sdp->has_parse_error = 1; } 
 
 /* STATIC */
 /* ------------------------------------------------------------------------ */
@@ -19,10 +17,13 @@ static char* read_token(char** data, const char* sep);
 static char* read_line(char** data);                                                             /* reads till the next CRLF, moves the pointer of data */
 static int read_u32(char** data, uint32_t* result, uint32_t max);                                /* reads the next couple of characters as a uint32_t */
 static int read_u64(char** data, uint64_t* result, uint64_t max);                                /* reads the next couple of characters as a uint64_t */
-static void parse_line(krx_sdp* sdp, char* line);                                                /* parses the content of the given line and stores the result in sdp */
+static void parse_line(krx_sdp* sdp, char* line);                                                /* parse the content of the given line and stores the result in sdp */
 static void parse_version(krx_sdp* sdp, char* line);                                             /* parse the version line. */
-static void parse_origin(krx_sdp* sdp, char* line, krx_sdp_origin** origin);                     /* pase the o= line, we allocate a new krx_sdp_connection */
+static void parse_origin(krx_sdp* sdp, char* line, krx_sdp_origin** origin);                     /* parse a origin string, we allocate a new krx_sdp_connection */
 static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con);                /* parse a connection string, we allocate a new krx_sdp_connection */
+static void parse_attribute(krx_sdp* sdp, char* line, krx_sdp_attribute** attr);                 /* parse an attribute string, we allocate a new krx_sdp_attribute */
+static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand);                 /* parse a candidate string, we allocate a new krx_sdp_candidate */
+static void parse_media(krx_sdp* sdp, char* line, krx_sdp_media** media);                        /* parse a media string, we allocate a new krx_sdp_media  */
 
 /* API */
 /* ------------------------------------------------------------------------ */
@@ -38,7 +39,9 @@ krx_sdp* krx_sdp_alloc() {
   k->media = NULL;
   k->sdp = NULL;
   k->origin = NULL;
+  k->attributes = NULL;
   k->has_parse_error = 0;
+  k->curr_attr = &k->attributes;
   return k;
 }
 
@@ -67,6 +70,13 @@ krx_sdp_media* krx_sdp_media_alloc() {
   }
 
   /* @todo(roxlu): init member of krx_sdp_media in alloc. */
+  m->port = 0;
+  m->num_ports = 0;
+  m->proto = SDP_PROTO_NONE;
+  m->type = SDP_MEDIA_TYPE_NONE;
+  m->next = NULL;
+  m->rtpmap = NULL;
+  m->attributes = NULL;
 
   return m;
 }
@@ -102,6 +112,60 @@ krx_sdp_connection* krx_sdp_connection_alloc() {
   return c;
 }
 
+krx_sdp_attribute* krx_sdp_attribute_alloc() {
+
+  krx_sdp_attribute* a = (krx_sdp_attribute*)malloc(sizeof(krx_sdp_attribute));
+  if(!a) {
+    printf("Error: cannot allocate krx_sdp_attribute.\n");
+    return NULL;
+  }
+
+  a->name = NULL;
+  a->value = NULL;
+  a->next = NULL;
+
+  return a;
+}
+
+krx_sdp_rtpmap* krx_sdp_rtpmap_alloc() {
+
+  krx_sdp_rtpmap* m = (krx_sdp_rtpmap*)malloc(sizeof(krx_sdp_rtpmap));
+  if(!m) {
+    printf("Error: cannot allocate krx_sdp_rtpmap.\n");
+    return NULL;
+  }
+
+  /* @todo(roxlu): init members of krx_sdp_rtpmap in alloc. */
+  m->next = NULL;
+  m->type = 0;
+
+  return m;
+}
+
+krx_sdp_candidate* krx_sdp_candidate_alloc() {
+
+  krx_sdp_candidate* c = (krx_sdp_candidate*)malloc(sizeof(krx_sdp_candidate));
+  if(!c) {
+    printf("Error: cannot allocate krx_sdp_candidate.\n");
+    return NULL;
+  }
+
+  /* todo(roxlu): init members of krx_sdp_candidate. */
+
+  c->foundation = NULL;
+  c->component_id = 0;
+  c->transport = SDP_TRANSPORT_NONE;
+  c->priority = 0;
+  c->addr = NULL;
+  c->port = 0;
+  c->raddr = NULL;
+  c->rport = 0;
+  c->type = SDP_CANDIDATE_TYPE_NONE;
+  c->next = NULL;
+
+  return c;
+}
+
 /* GENERATING */
 /* ------------------------------------------------------------------------ */
 int krx_sdp_add_media(krx_sdp* sdp, krx_sdp_media* m) {
@@ -126,10 +190,13 @@ int krx_sdp_add_media(krx_sdp* sdp, krx_sdp_media* m) {
 /* PARSING */
 /* ------------------------------------------------------------------------ */
 int krx_sdp_parse(krx_sdp* k, char* buf, int nbytes) {
+
   if(!k) { return -1; };
   if(!buf) { return -2; }
   if(!nbytes) { return -3; } 
   if(k->sdp) { return -4; } 
+  if(k->media) { return -5; } 
+  if(k->attributes) { return -6; } 
   
   if(nbytes > 1024*1024) {
     printf("Error: the sdp seems a bit to large.\n");
@@ -162,6 +229,13 @@ int krx_sdp_parse(krx_sdp* k, char* buf, int nbytes) {
   return 0;
 }
 
+/*
+int krx_sdp_parse_candidate(krx_sdp* sdp, char* value, krx_sdp_candidate** candidate) {
+  printf("Parse canidate: %s\n", value);
+  return 0;
+}
+*/
+
 /* STATIC */
 /* ------------------------------------------------------------------------ */
 
@@ -180,6 +254,55 @@ static void parse_line(krx_sdp* sdp, char* line) {
     }
     case 'o': {
       parse_origin(sdp, value, &sdp->origin);
+      break;
+    }
+    case 'a': {
+
+      krx_sdp_attribute* attr = NULL;
+      parse_attribute(sdp, value, &attr);
+
+      if(attr) {
+
+        /* append the attribute to a media attribute list or to the general session attributes */
+        krx_sdp_attribute* tail = *sdp->curr_attr;
+        if(!tail) {
+          *sdp->curr_attr = attr;
+        }
+        else {
+          while(tail) {
+            if(!tail->next) {
+              break;
+            }
+            tail = tail->next;
+          }
+          tail->next = attr; /* append to end */
+        }
+      }
+      break;
+    }
+    case 'm': {
+      krx_sdp_media* media = NULL;
+      parse_media(sdp, value, &media);
+
+      if(media) {
+        /* make sure that any new found attributes are added to the attributes of the media element. */
+        sdp->curr_attr = &media->attributes;
+
+        /* append the media to the end. */
+        krx_sdp_media* tail = sdp->media;
+        if(!tail) {
+          sdp->media = media;
+        }
+        else {
+          while(tail) {
+            if(!tail->next) {
+              break;
+            }
+            tail = tail->next;
+          }
+          tail->next = media;
+        }
+      }
       break;
     }
     default: { 
@@ -226,6 +349,190 @@ static void parse_origin(krx_sdp* sdp, char* line, krx_sdp_origin** origin) {
   parse_connection(sdp, line, &o->address);
 }
 
+static void parse_attribute(krx_sdp* sdp, char* line, krx_sdp_attribute** attr) {
+  char* name;
+  krx_sdp_attribute* a;
+  *attr = NULL;
+
+  /* parse name part. */
+  name = read_token(&line, ":");
+  if(!name) {
+    PARSE_ERROR(sdp, "Invalid attribute name");
+    return ;
+  }
+
+  /* parse known attributes and append them to the appropriate lists */
+  if(krx_stricmp(name, "candidate") == 0) {
+    krx_sdp_candidate* cand = NULL;
+    parse_candidate(sdp, line, &cand); 
+    /* @todo(roxlu): append the new candidate to the last media */
+  }
+  else {
+
+    /* alloc new attrib */
+    a = krx_sdp_attribute_alloc();
+    if(!a) {
+      PARSE_ERROR(sdp, "Cannot allocate new attribute.");
+      return;
+    }
+
+    a->name = name;
+    a->value = line;
+    *attr = a;
+  }
+}
+
+/* url: http://tools.ietf.org/html/rfc5245#section-15.1 */
+/* example: a=candidate:1 1 UDP 1694236671 84.105.186.141 9708 typ srflx raddr 192.168.0.194 rport 5179 */
+static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) {
+  printf("Lets parse a candidate.\n");
+  char* s;
+  krx_sdp_candidate* c = krx_sdp_candidate_alloc();
+  if(!c) {
+    return;
+  }
+  
+  /* foundation */
+  c->foundation = read_token(&line, SPACE TAB);
+  if(!c->foundation) {
+    PARSE_ERROR(sdp, "Cannot parse the foundation of a candidate.");
+    free(c);
+    c = NULL;
+    return;
+  }
+
+  /* component */
+  if(read_u32(&line, &c->component_id, 0) < 0) {
+    PARSE_ERROR(sdp, "Cannot parse the component ID of a candidate.");
+    free(c);
+    c = NULL;
+    return;
+  }
+
+  /* transport */
+  s = read_token(&line, SPACE TAB);
+  if(!s) {
+    PARSE_ERROR(sdp, "Cannot parse the transport of a candidate.");
+    free(c);
+    c = NULL;
+    return;
+  }
+
+  if(krx_stricmp(s, "UDP") == 0) {
+    c->transport = SDP_UDP;
+  }
+  else {
+    PARSE_ERROR(sdp, "Unhandled transport type in the candidate.");
+    free(c);
+    c = NULL;
+    return;
+  }
+
+  /* priority */
+  if(read_u64(&line, &c->priority, 0) < 0) {
+    PARSE_ERROR(sdp, "Invalid priority in candidate.");
+    free(c);
+    c = NULL;
+    return;
+  }
+
+  /* addr */
+  c->addr = read_token(&line, SPACE TAB);
+  if(!c->addr) {
+    PARSE_ERROR(sdp, "Invalid address in candidate.");
+    free(c);
+    c = NULL;
+    return;
+  }
+
+  /* port */
+  if(read_u32(&line, &c->port, 0) < 0) {
+    PARSE_ERROR(sdp, "Invalid address in candidate.");
+    free(c);
+    c = NULL;
+    return;
+  }
+
+  s = read_token(&line, SPACE TAB);
+  if(!s || krx_strnicmp(s, "typ", 3) != 0) {
+    PARSE_ERROR(sdp, "Invalid candidate not typ string found.");
+    free(c);
+    c = NULL;    
+    return;
+  }
+
+  s = read_token(&line, SPACE TAB);
+  if(!s) {
+    PARSE_ERROR(sdp, "Invalid candidate type was not found.");
+    free(c);
+    c = NULL;    
+    return;
+  }
+
+  /* host type */
+  if(krx_stricmp(s, "host") == 0) {
+    c->type = SDP_HOST;
+  }
+  else if(krx_stricmp(s, "srflx") == 0) {
+    c->type = SDP_SRFLX;
+  }
+  else if(krx_stricmp(s, "prflx") == 0) {
+    c->type = SDP_PRFLX;
+  }
+  else if(krx_stricmp(s, "relay") == 0) {
+    c->type = SDP_RELAY;
+  }
+  else {
+    PARSE_ERROR(sdp, "Invalid host type in candidate.");
+    free(c);
+    c = NULL;    
+    return;
+  }
+
+  /* Can we stop here? only when it's a SDP_HOST type */
+  if(c->type == SDP_HOST) {
+    *cand = c;
+    return;
+  }
+
+  /* raddr */
+  s = read_token(&line, SPACE TAB);
+  if(!s || krx_stricmp(s, "raddr") != 0) {
+    PARSE_ERROR(sdp, "Invalid candidate, not raddr host type in candidate.");
+    free(c);
+    c = NULL;    
+    return;
+  }
+
+  /* raddr value */
+  c->raddr = read_token(&line, SPACE TAB);
+  if(!c->raddr) {
+    PARSE_ERROR(sdp, "Invalid candidate, no raddr found.");
+    free(c);
+    c = NULL;    
+    return;    
+  }
+
+  /* `rport` */
+  s = read_token(&line, SPACE TAB);
+  if(!s || krx_stricmp(s, "rport") != 0) {
+    PARSE_ERROR(sdp, "Invalid candidate, no rport found.");
+    free(c);
+    c = NULL;    
+    return;    
+  }
+
+  /* rport value */
+  if(read_u32(&line, &c->rport, 0) < 0) {
+    PARSE_ERROR(sdp, "Invalid candidate, no rport found.");
+    free(c);
+    c = NULL;    
+    return;    
+  }
+
+  *cand = c;
+}
+
 /* url: http://tools.ietf.org/html/rfc4566#section-5.7 */
 /* example: IN IP4 224.2.36.42/127/3 */
 static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con) {
@@ -254,6 +561,8 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
     }
     else {
       PARSE_ERROR(sdp, "Invalid address type.");
+      free(c);
+      *con = NULL;
       return;
     }
 
@@ -261,6 +570,8 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
     c->address = read_token(&line, SPACE TAB);
     if(!c->address) {
       PARSE_ERROR(sdp, "Invalid address.");
+      free(c);
+      *con = NULL;
       return;
     }
 
@@ -270,8 +581,10 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
     if(s) { 
       uint32_t value;
       *s++ = 0;
-      if (read_u32(&s, &value, 256) || (*s && *s != '/')) {
+      if(read_u32(&s, &value, 256) < 0|| (*s && *s != '/')) {
         PARSE_ERROR(sdp, "Inavlid TTL.");
+        free(c);
+        *con = NULL;
         return;
       }
       c->ttl = value;
@@ -282,6 +595,9 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
       if(*s++ == '/') {
         if(read_u32(&s, &value, 0) || *s) {
           PARSE_ERROR(sdp, "Invalid groups.");
+          free(c); 
+          *con = NULL;
+          return;
         }
       }
       c->num_groups = value;
@@ -289,8 +605,117 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
   }
   else {
     PARSE_ERROR(sdp, "Invalid net type.");
+    free(c);
+    *con = NULL;
     return;
   }
+}
+
+/* url: http://tools.ietf.org/html/rfc4566#section-5.14 */
+/* example: video 49170/2 RTP/AVP 31 */
+static void parse_media(krx_sdp* sdp, char* value, krx_sdp_media** media) {
+
+  uint32_t num = 0;
+  char* s;
+
+  krx_sdp_media* m = krx_sdp_media_alloc();
+  if(!m) {
+    return ;
+  }
+
+  /* media type */
+  s = read_token(&value, SPACE TAB);
+  if(!s) {
+    PARSE_ERROR(sdp, "Invalid media.");
+    free(m);
+    m = NULL;
+    return;
+  }
+
+  if(krx_stricmp(s, "video") == 0) {
+    m->type = SDP_VIDEO;
+  }
+  else if(krx_stricmp(s, "audio") == 0) {
+    m->type = SDP_AUDIO;
+  }
+  else {
+    PARSE_ERROR(sdp, "Unhandled media type.");
+    free(m);
+    m = NULL;
+    return;
+  }
+
+  /* port */
+  if(read_u32(&value, &num, 0) < 0) {
+    PARSE_ERROR(sdp, "Invalid port in media");
+    free(m);
+    m = NULL;
+    return;
+  }
+  m->port = num;
+
+  /* number of ports */
+  if(*value == '/') {  
+    *value++ = 0;
+    if(read_u32(&value, &num, 0) < 0) {
+      PARSE_ERROR(sdp, "Invalid number of parts.");
+      free(m);
+      m = NULL;
+      return;
+    }
+    m->num_ports = num;
+  }
+
+  /* proto */
+  s = read_token(&value, SPACE TAB);
+  if(!s) {
+    PARSE_ERROR(sdp, "Invalid proto");
+    free(m);
+    m = NULL;
+    return;
+  }
+  if(krx_stricmp(s, "RTP/SAVPF") == 0) {
+    m->proto = SDP_UDP_RTP_SAVPF;
+  }
+  else {
+    PARSE_ERROR(sdp, "Unhandled proto.");
+    free(m);
+    m = NULL;
+    return;
+  }
+
+  /* rtp format list */
+  uint32_t fmt = 0;
+
+  while(read_u32(&value, &fmt, 0) == 0) { 
+
+    /* alloc new krx_sdp_rtpmap */
+    krx_sdp_rtpmap* rtpmap = krx_sdp_rtpmap_alloc();
+    if(!rtpmap) {
+      free(m);
+      m = NULL;
+      return;
+    }
+    
+    rtpmap->type = fmt;
+
+    /* append the rtpmap to the end */
+    if(m->rtpmap == NULL) {
+      m->rtpmap = rtpmap;
+    }
+    else {
+      krx_sdp_rtpmap* head = m->rtpmap;
+      while(head) {
+        if(!head->next) {
+          break;
+        }
+        head = head->next;
+      }
+      head->next = rtpmap;
+    }
+  };
+
+  *media = m;
 }
 
 static int read_u32(char** data, uint32_t* result, uint32_t max) {
@@ -330,7 +755,6 @@ static char* read_token(char** data, const char* sep) {
 
   if(sep) {
     n = strcspn(result, sep);
-    printf(">> %zu == %s\n", n, result);
   }
 
   if(result[n]) {
@@ -338,44 +762,14 @@ static char* read_token(char** data, const char* sep) {
   }
   
   *data += n;
-  return result;
-}
 
-#if 0
-static char* read_token(char** data,                      /* data to read a token from */
-                        const char* sep,                  /* read up to this character/separator  */
-                        const char* legal,                /* read from the start, when we read one character that is not in `legal` we stop */
-                        const char* stripleft             /* remove any of these characters from the start */
-) 
-{
-  size_t n;
-  char *retval = *data;
-
-  if (stripleft)
-    retval += strspn(retval, stripleft);
-
-  if (legal)
-    n = strspn(retval, legal);
-  else
-    n = strcspn(retval, sep);
-
-  if (n == 0)
+  /* did we reach the end of the string? */
+  if(*result == '\0') {
     return NULL;
-
-  if (retval[n]) {
-    retval[n++] = '\0';
-    n += strspn(retval + n, sep);
   }
 
-  *message = retval + n;
-
-  if (*retval == '\0')
-    return NULL;
-
-  return retval;
-
+  return result;
 }
-#endif
 
 static char* read_line(char** data) {
 
