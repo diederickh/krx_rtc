@@ -5,6 +5,7 @@ project(udp_test)
 include(Triplet.cmake)
 
 set(bd ${CMAKE_CURRENT_LIST_DIR})
+set(CMAKE_BUILD_TYPE Debug)
 
 set(use_test_stun TRUE)
 
@@ -50,6 +51,7 @@ if(use_test_stun)
     ${bd}/../src/krx_stun.c
     ${bd}/../src/krx_utils.c
     ${bd}/../src/krx_memory.c
+    ${bd}/../src/krx_sdp.c
     )
   target_link_libraries(test_stun ${libraries})
   install(TARGETS test_stun DESTINATION bin)

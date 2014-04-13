@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <uv.h>
 #include "krx_stun.h"
+#include "krx_sdp.h"
 #include "krx_utils.h"
 #include "krx_memory.h"
 
@@ -24,9 +25,9 @@ struct app {
 };
 
 void sighandler(int sn);                                                                                            /* we're handling SIGINT .. to shutdown stuff */
-uv_buf_t on_alloc(uv_handle_t* handle, size_t nbytes);                                                   /* is called when we need a buffer to store some bytes into */
+uv_buf_t on_alloc(uv_handle_t* handle, size_t nbytes);                                                              /* is called when we need a buffer to store some bytes into */
 //aka 'void (*)(uv_udp_t *, ssize_t, uv_buf_t, struct sockaddr *, unsigned int)')
-void on_read(uv_udp_t* handle, ssize_t nread, uv_buf_t buf, struct sockaddr* addr, unsigned flags);    /* is called when we receive some data */
+void on_read(uv_udp_t* handle, ssize_t nread, uv_buf_t buf, struct sockaddr* addr, unsigned flags);                 /* is called when we receive some data */
 void on_send(uv_udp_send_t* req, int status);                                                                       /* gets called when we've sent some data */
 void on_resolved(uv_getaddrinfo_t* resolver, int status, struct addrinfo* res);                                     /* gets called when a server is resolved. */
 int stun_send(krx_stunc* s, uint8_t* data, int nbytes);                            
@@ -37,6 +38,34 @@ app ctx;
 int main() {
 
   int r = 0;
+
+#if 1
+  /* generate a basic sdp */
+  krx_sdp* sdp = krx_sdp_alloc();
+  if(!sdp) { 
+    printf("Error: invalid sdp.\n"); 
+    exit(1);
+  } 
+
+  krx_sdp_media* media = krx_sdp_media_alloc();
+  if(!media) {
+    printf("Error: invalid media.\n");
+    exit(1);
+  }
+
+  krx_sdp_add_media(sdp, media);
+
+  char sdp_buf[8192];
+  if(krx_read_file("./sdp.txt", sdp_buf, sizeof(sdp_buf)) < 0) {
+    exit(1);
+  }
+
+  printf("\n--------\n%s\n-----------\n", sdp_buf);
+
+  krx_sdp_parse(sdp, sdp_buf, strlen(sdp_buf) + 1);
+
+  exit(0);
+#endif
 
 #if 0
   uint8_t b[10];

@@ -36,6 +36,81 @@ int krx_stricmp(char const* s1, char const* s2) {
   }
 }
 
+int krx_strnicmp(const char* s1, const char* s2, size_t n) {
+
+  if(n == 0) {
+    return -1;
+  }
+
+  if(s1 == s2) {
+    return -1;
+  }
+
+  if(s1 == NULL || s2 == NULL) {
+    return -1;
+  }
+
+  if(strncmp(s1, s2, n) == 0) {
+    return 0;
+  }
+
+  while(n-- > 0) {
+    unsigned char a = *s1++, b = *s2++;
+
+    if(a == 0 || b == 0) {
+      return (a == b) ? 0 : -1;
+    }
+
+    if(a == b) {
+      continue;
+    }
+
+    if('A' <= a && a <= 'Z') {
+      if (a + 'a' - 'A' != b) {
+        return -1;
+      }
+    }
+    else if('A' <= b && b <= 'Z') {
+      if(a != b + 'a' - 'A') {
+        return -1;
+      }
+    }
+    else {
+      return -1;
+    }
+  }
+}
+
+int krx_read_file(const char* path, char* buf, int len) {
+  /* try to open the file */
+  FILE* fp = fopen(path, "r");
+  if(!fp) { 
+    printf("Error: cannot read file: %s\n", path);
+    return -1;
+  }
+
+  /* find size */
+  long size = 0;
+  fseek(fp, 0, SEEK_END);
+  size = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+
+  if(size > len) {
+    printf("Error: file size it too large for given buffer. We need: %ld bytes.\n", size);
+    fclose(fp);
+    return -2;
+  }
+
+  size_t r = fread(buf, size, 1, fp);
+  if(r != 1) {
+    printf("Error: cannot read file into buffer.\n");
+    fclose(fp);
+    return -3;
+  }
+
+  return (int)size;
+}
+
 void krx_write_u8(uint8_t** buf, uint8_t value) {
   uint8_t* p = *buf;
   *p = value;
