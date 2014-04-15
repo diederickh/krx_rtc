@@ -12,7 +12,6 @@
 
 /* STATIC */
 /* ------------------------------------------------------------------------ */
-//static char* read_token(char** data, const char* sep, const char* legal, const char* stripleft); /* read a token from the given data, moving the pointer ahead */
 static char* read_token(char** data, const char* sep);
 static char* read_line(char** data);                                                             /* reads till the next CRLF, moves the pointer of data */
 static int read_u32(char** data, uint32_t* result, uint32_t max);                                /* reads the next couple of characters as a uint32_t */
@@ -461,6 +460,7 @@ int krx_sdp_candidates_to_string(krx_sdp_candidate* c, char* buf, int nbytes) {
             krx_sdp_candidate_type_to_string(cand->type)
     );
 
+    /* type */
     if(cand->type == SDP_SRFLX) {
       pos = strlen(buf);
       sprintf(buf + pos, " raddr %s rport %u", 

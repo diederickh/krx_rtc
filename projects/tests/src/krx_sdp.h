@@ -130,6 +130,11 @@ struct krx_sdp {
   krx_sdp_attribute** curr_attr;                /* the attribute list that we need to append to */
 };
 
+struct krx_sdp_parser {
+  krx_sdp* session;
+
+};
+
 /* allocate krx_sdp_* types */
 krx_sdp* krx_sdp_alloc();
 krx_sdp_media* krx_sdp_media_alloc();
