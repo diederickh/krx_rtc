@@ -5,7 +5,6 @@ project(udp_test)
 include(Triplet.cmake)
 
 set(bd ${CMAKE_CURRENT_LIST_DIR})
-set(CMAKE_BUILD_TYPE Debug)
 
 set(use_test_stun TRUE)
 
@@ -46,15 +45,21 @@ endif()
 set(CMAKE_INSTALL_PREFIX ${install_dir})
 
 if(use_test_stun)
-  add_executable(test_stun
+
+  set(test_stun "test_stun")
+  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(test_stun "test_stun_debug")
+  endif()
+
+  add_executable(${test_stun}
     ${bd}/../src/test_stun.c
     ${bd}/../src/krx_stun.c
     ${bd}/../src/krx_utils.c
     ${bd}/../src/krx_memory.c
     ${bd}/../src/krx_sdp.c
     )
-  target_link_libraries(test_stun ${libraries})
-  install(TARGETS test_stun DESTINATION bin)
+  target_link_libraries(${test_stun} ${libraries})
+  install(TARGETS ${test_stun} DESTINATION bin)
 endif()
 
 

@@ -15,7 +15,14 @@
 #include <stdint.h>
 #include <time.h>
 
+#define SDP_CLONE_RTPMAPS    0x0001         /* clone all rtpmaps */
+#define SDP_CLONE_CANDIDATES 0x0002         /* clone all candidates */
+#define SDP_CLONE_ATTRIBUTES 0x0004         /* clone all attributes */
+#define SDP_CLONE_ALL        0x000F         /* clone all possible elements */
+
 typedef struct krx_sdp krx_sdp;
+typedef struct krx_sdp_reader krx_sdp_reader;
+typedef struct krx_sdp_writer krx_sdp_writer;
 typedef struct krx_sdp_media krx_sdp_media;
 typedef struct krx_sdp_origin krx_sdp_origin;
 typedef struct krx_sdp_connection krx_sdp_connection;
@@ -119,24 +126,27 @@ struct krx_sdp_media {
 };
 
 struct krx_sdp { 
-  char* sdp;                                    /* the buffer which is passed to krx_sdp_parse; we copy it. */
   char* version;
   krx_sdp_origin* origin;
   krx_sdp_media* media;
   krx_sdp_attribute* attributes;
+};
 
-  /* parse specific */
-  uint8_t has_parse_error;                      /* is set to 1 when something goes wrong with parseing */
+struct krx_sdp_reader {
+  krx_sdp* session;                             /* after reading a string this will hold the parsed sdp */
+  char* buffer;                                 /* the buffer which is passed to krx_sdp_parse; we copy it. */
+  uint8_t has_error;                            /* is set to 1 when something goes wrong with parseing */
   krx_sdp_attribute** curr_attr;                /* the attribute list that we need to append to */
 };
 
-struct krx_sdp_parser {
-  krx_sdp* session;
-
+struct krx_sdp_writer {
+  krx_sdp* session;                             /* the session that we generate */
 };
 
 /* allocate krx_sdp_* types */
 krx_sdp* krx_sdp_alloc();
+krx_sdp_reader* krx_sdp_reader_alloc();
+krx_sdp_writer* krx_sdp_writer_alloc();
 krx_sdp_media* krx_sdp_media_alloc();
 krx_sdp_origin* krx_sdp_origin_alloc();
 krx_sdp_connection* krx_sdp_connection_alloc();
@@ -146,6 +156,8 @@ krx_sdp_candidate* krx_sdp_candidate_alloc();
 
 /* deallocate krx_sdp_* types; these also nicely cleanup the members of the types. */
 void krx_sdp_dealloc(krx_sdp* sdp);
+void krx_sdp_reader_dealloc(krx_sdp_reader* reader);
+void krx_sdp_writer_dealloc(krx_sdp_writer* writer);
 void krx_sdp_media_dealloc(krx_sdp_media* m);
 void krx_sdp_origin_dealloc(krx_sdp_origin* o);
 void krx_sdp_connection_dealloc(krx_sdp_connection* conn);
@@ -154,8 +166,10 @@ void krx_sdp_rtpmap_dealloc(krx_sdp_rtpmap* map);
 void krx_sdp_attribute_dealloc(krx_sdp_attribute* attr);
 
 /* parsing and manipulating */
-int krx_sdp_parse(krx_sdp* sdp, char* buf, int nbytes);
-int krx_sdp_remove_candidates(krx_sdp_media* m);       /* removes and deallocs all candidats from the given media */
+int krx_sdp_read(krx_sdp_reader* reader, char* buf, int nbytes);
+int krx_sdp_remove_candidates(krx_sdp_media* m);                                        /* removes and deallocs all candidats from the given media */
+
+int krx_sdp_clone_media(krx_sdp_writer* writer, krx_sdp_media* media, uint32_t what);   /* clone several elements from the given media element */
 
 int krx_sdp_add_media(krx_sdp* sdp, krx_sdp_media* m); /* @todo(roxlu): test krx_sdp_add_media */
 int krx_sdp_media_to_string(krx_sdp_media* m, char* buf, int nbytes); /* @todo(roxlu): media_to_string, check size. */
@@ -165,7 +179,6 @@ char* krx_sdp_media_type_to_string(krx_sdp_media_type type);
 char* krx_sdp_proto_type_to_string(krx_sdp_proto proto);
 char* krx_sdp_transport_type_to_string(krx_sdp_transport_type trans);
 char* krx_sdp_candidate_type_to_string(krx_sdp_candidate_type type);
-
 
 int krx_sdp_print(krx_sdp* sdp, char* buf, int nbytes);
 

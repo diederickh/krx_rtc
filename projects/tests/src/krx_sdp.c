@@ -8,24 +8,59 @@
 #define ALPHA "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 #define DIGIT "0123456789"
 #define TOKEN ALPHA DIGIT "-!#$%&'*+.^_`{|}~"
-#define PARSE_ERROR(sdp, msg) { printf("Error: %s\n", msg); sdp->has_parse_error = 1; } 
+#define PARSE_ERROR(reader, msg) { printf("Error: %s\n", msg); reader->has_error = 1; } 
 
 /* STATIC */
 /* ------------------------------------------------------------------------ */
 static char* read_token(char** data, const char* sep);
-static char* read_line(char** data);                                                             /* reads till the next CRLF, moves the pointer of data */
-static int read_u32(char** data, uint32_t* result, uint32_t max);                                /* reads the next couple of characters as a uint32_t */
-static int read_u64(char** data, uint64_t* result, uint64_t max);                                /* reads the next couple of characters as a uint64_t */
-static void parse_line(krx_sdp* sdp, char* line);                                                /* parse the content of the given line and stores the result in sdp */
-static void parse_version(krx_sdp* sdp, char* line);                                             /* parse the version line. */
-static void parse_origin(krx_sdp* sdp, char* line, krx_sdp_origin** origin);                     /* parse a origin string, we allocate a new krx_sdp_connection */
-static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con);                /* parse a connection string, we allocate a new krx_sdp_connection */
-static void parse_attribute(krx_sdp* sdp, char* line, krx_sdp_attribute** attr);                 /* parse an attribute string, we allocate a new krx_sdp_attribute */
-static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand);                 /* parse a candidate string, we allocate a new krx_sdp_candidate */
-static void parse_media(krx_sdp* sdp, char* line, krx_sdp_media** media);                        /* parse a media string, we allocate a new krx_sdp_media  */
+static char* read_line(char** data);                                                                       /* reads till the next CRLF, moves the pointer of data */
+static int read_u32(char** data, uint32_t* result, uint32_t max);                                          /* reads the next couple of characters as a uint32_t */
+static int read_u64(char** data, uint64_t* result, uint64_t max);                                          /* reads the next couple of characters as a uint64_t */
+static void parse_line(krx_sdp_reader* reader, char* line);                                                /* parse the content of the given line and stores the result in sdp */
+static void parse_version(krx_sdp_reader* reader, char* line);                                             /* parse the version line. */
+static void parse_origin(krx_sdp_reader* reader, char* line, krx_sdp_origin** origin);                     /* parse a origin string, we allocate a new krx_sdp_connection */
+static void parse_connection(krx_sdp_reader* reader, char* line, krx_sdp_connection** con);                /* parse a connection string, we allocate a new krx_sdp_connection */
+static void parse_attribute(krx_sdp_reader* reader, char* line, krx_sdp_attribute** attr);                 /* parse an attribute string, we allocate a new krx_sdp_attribute */
+static void parse_candidate(krx_sdp_reader* reader, char* line, krx_sdp_candidate** cand);                 /* parse a candidate string, we allocate a new krx_sdp_candidate */
+static void parse_media(krx_sdp_reader* reader, char* line, krx_sdp_media** media);                        /* parse a media string, we allocate a new krx_sdp_media  */
 
 /* API */
 /* ------------------------------------------------------------------------ */
+
+krx_sdp_reader* krx_sdp_reader_alloc() {
+
+  krx_sdp_reader* r = (krx_sdp_reader*) malloc(sizeof(krx_sdp_reader));
+  if(!r) {
+    printf("Error: cannot allocate krx_sdp_reader.\n");
+    return NULL;
+  }
+
+  r->buffer = NULL;
+  r->session = NULL;
+  r->has_error = 0;
+  r->curr_attr = NULL;
+
+  return r;
+}
+
+krx_sdp_writer* krx_sdp_writer_alloc() {
+
+  krx_sdp_writer* w = (krx_sdp_writer*)malloc(sizeof(krx_sdp_writer));
+  if(!w) {
+    printf("Error: cannot allocate krx_sdp_writer.\n");
+    return NULL;
+  }
+
+  w->session = krx_sdp_alloc();
+  if(!w->session) {
+    free(w);
+    w = NULL;
+    return NULL;
+  }
+
+  return w;
+}
+
 krx_sdp* krx_sdp_alloc() {
 
   krx_sdp* k = (krx_sdp*)malloc(sizeof(krx_sdp));
@@ -36,11 +71,10 @@ krx_sdp* krx_sdp_alloc() {
   
   /* @todo(roxlu): init members of krx_sdp in alloc. */
   k->media = NULL;
-  k->sdp = NULL;
   k->origin = NULL;
   k->attributes = NULL;
-  k->has_parse_error = 0;
-  k->curr_attr = &k->attributes;
+  k->version = NULL;
+
   return k;
 }
 
@@ -137,23 +171,47 @@ void krx_sdp_attribute_dealloc(krx_sdp_attribute* attribs) {
 
 void krx_sdp_dealloc(krx_sdp* sdp) {
 
-  if(!sdp) { return; } 
-
+  if(!sdp) { 
+    return; 
+  } 
 
   krx_sdp_attribute_dealloc(sdp->attributes);
   krx_sdp_media_dealloc(sdp->media);
 
-  /* free our copy of the sdp string */
-  /* @todo(roxlu): why does freeing of krx_sdp.sdp says that the memory isn't allocated? */
-  /*
-  if(sdp->sdp) {
-    free(sdp->sdp);
-    sdp->sdp = NULL;
-  }
-  */
-
   free(sdp);
   sdp = NULL;
+}
+
+void krx_sdp_reader_dealloc(krx_sdp_reader* reader) {
+
+  if(!reader) { 
+    return; 
+  } 
+
+  if(reader->session) {
+    krx_sdp_dealloc(reader->session);
+    reader->session = NULL;
+  }
+
+  if(reader->buffer) {
+    free(reader->buffer);
+    reader->buffer = NULL;
+  }
+
+  reader->has_error = 0;
+  reader->curr_attr = NULL;
+
+  free(reader);
+  reader = NULL;
+}
+
+void krx_sdp_writer_dealloc(krx_sdp_writer* writer) {
+
+  if(!writer) {
+    return;
+  }
+
+  /* todo(roxlu): krx_sdp_writer_dealloc(), dealloc all allocated members */
 }
 
 krx_sdp_media* krx_sdp_media_alloc() {
@@ -283,39 +341,153 @@ int krx_sdp_add_media(krx_sdp* sdp, krx_sdp_media* m) {
   return 0;
 }
 
+int krx_sdp_clone_media(krx_sdp_writer* writer, krx_sdp_media* media, uint32_t what) {
+  if(!writer) { return -1; } 
+  if(!media) { return -2; } 
+
+  krx_sdp_media* m = krx_sdp_media_alloc();
+  if(!m) { return -3; } 
+
+  /* append the media element to the end. */
+  krx_sdp_media* tail = writer->session->media;
+  while(tail) {
+    if(!tail->next) {
+      break;
+    }
+    tail = tail->next;
+  }
+  tail->next = m;
+
+  /* clone media info */
+  m->port = media->port;
+  m->num_ports = media->num_ports;
+  m->proto = media->proto;
+  m->type = media->type;
+
+  /* clone RTPMAPS */
+  if(what & SDP_CLONE_RTPMAPS) {
+    krx_sdp_rtpmap* rtpmaps = media->rtpmap;
+    krx_sdp_rtpmap* rtpmap_tail = m->rtpmap;
+    while(rtpmaps) {
+
+      /* allocate a new rtpmap */
+      krx_sdp_rtpmap* new_rtpmap = krx_sdp_rtpmap_alloc();
+      if(!new_rtpmap) {
+        printf("Error: cannot allocate a new rtpmap.\n");
+        /* @todo(roxlu): in krx_sdp_clone, we probably want to clean when cloning of rtpmaps fails. */
+        return -1;
+      }
+
+      /* copy data */
+      new_rtpmap->type = rtpmaps->type;
+
+      /* append to tail */
+      if(!rtpmap_tail) {
+        rtpmap_tail = new_rtpmap;
+      }
+      else {
+        rtpmap_tail->next = new_rtpmap;
+        rtpmap_tail = new_rtpmap;
+      }
+
+      rtpmaps = rtpmaps->next;
+    }
+  }
+
+  /* clone attributes */
+  if(what & SDP_CLONE_ATTRIBUTES) {
+
+    krx_sdp_attribute* attr = media->attributes;
+    krx_sdp_attribute* attr_tail = m->attributes;
+
+    while(attr) {
+
+      krx_sdp_attribute* new_attr = krx_sdp_attribute_alloc();
+      if(!new_attr) {
+        /* @todo(roxlu): in krx_sdp_clone we probably want to dealloc everything when allocating fails */
+        return -1;
+      }
+
+      /* @todo(roxlu): in krx_sdp_clone, do we want to check the size of the name/value that we clone? */
+      
+      if(strlen(attr->name)) {
+        new_attr->name = malloc(strlen(attr->name) + 1);
+        memcpy(new_attr->name, attr->name, strlen(attr->name) + 1); /* @todo(roxlu): we probably want to check if malloc works when we cloning a media element */
+      }
+
+      if(strlen(attr->value)) {
+        new_attr->value = malloc(strlen(attr->value) + 1);  /* @todo(roxlu): we probably want to check if malloc works when cloning a media element */
+        memcpy(new_attr->value, attr->value, strlen(attr->value) + 1);
+      }
+
+      /* append to tail */
+      if(attr_tail) {
+        attr_tail = new_attr;
+      }
+      else {
+        attr_tail->next = new_attr;
+        attr_tail = new_attr;
+      }
+      attr = attr->next;
+    }
+  }
+
+  if(what & SDP_CLONE_CANDIDATES) {
+    printf("Error: we still need to implement cloning of candidates.\n");
+    /* @todo(roxlu): in krx_sdp_clone_media() we need to implement cloning of candidates */
+  }
+
+  return 0;
+}
+
 /* PARSING */
 /* ------------------------------------------------------------------------ */
-int krx_sdp_parse(krx_sdp* k, char* buf, int nbytes) {
 
-  if(!k) { return -1; };
-  if(!buf) { return -2; }
+int krx_sdp_read(krx_sdp_reader* reader, char* buf, int nbytes) {
+
+  char* read_ptr = NULL;
+
+  /* validate input */
+  if(!reader) { return -1; } 
+  if(!buf) { return -2; } 
   if(!nbytes) { return -3; } 
-  if(k->sdp) { return -4; } 
-  if(k->media) { return -5; } 
-  if(k->attributes) { return -6; } 
+  if(reader->buffer != NULL) { return -4; } 
+  if(reader->session != NULL) { return -5; } 
   
   if(nbytes > 1024*1024) {
     printf("Error: the sdp seems a bit to large.\n");
-    return -5;
+    return -6;
   }
 
-  k->sdp = (char*)malloc(nbytes);
-  if(!k->sdp) { return -6; } 
-  memcpy(k->sdp, buf, nbytes);
+  /* copy the buffer as we change the incoming string */
+  reader->buffer = (char*)malloc(nbytes);
+  if(!reader->buffer) { 
+    return -7; 
+  } 
+  memcpy(reader->buffer, buf, nbytes);
+  read_ptr = reader->buffer;
 
-  
+  /* allocate session */
+  reader->session = krx_sdp_alloc();
+  if(!reader->session) {
+    return -8;
+  }
+
+  /* where do we add attributes? */
+  reader->curr_attr = &reader->session->attributes;
+
   char* line = NULL; 
   do { 
 
     /* get next line. */
-    line = read_line(&k->sdp);
+    line = read_line(&read_ptr);
     if(!line) {
       break;
     }
 
-    parse_line(k, line);
+    parse_line(reader, line);
 
-    if(k->has_parse_error != 0) {
+    if(reader->has_error != 0) {
       /* @todo(roxlu): we probably want to free all allocated objects when krx_sdp_parse()ing fails. */
       printf("Error: cannot parse.\n");
       return -1;
@@ -368,9 +540,6 @@ int krx_sdp_print(krx_sdp* sdp, char* buf, int nbytes) {
 
     m = m->next;
   }
-
-  printf("----\n%s\n----\n", buf);
-
   return 0;
 }
 
@@ -528,34 +697,34 @@ char* krx_sdp_transport_type_to_string(krx_sdp_transport_type trans) {
 /* STATIC */
 /* ------------------------------------------------------------------------ */
 
-static void parse_line(krx_sdp* sdp, char* line) {
+static void parse_line(krx_sdp_reader* reader, char* line) {
 
   if(!line) { printf("Error: invalid sdp line.\n"); return;} 
-  if(!sdp) { printf("Error: invalid sdp.\n"); return; } 
+  if(!reader) { printf("Error: invalid sdp.\n"); return; } 
 
   char c = line[0];
   char* value = line + 2;
 
   switch(c) {
     case 'v': { 
-      parse_version(sdp, value);
+      parse_version(reader, value);
       break;
     }
     case 'o': {
-      parse_origin(sdp, value, &sdp->origin);
+      parse_origin(reader, value, &reader->session->origin);
       break;
     }
     case 'a': {
 
       krx_sdp_attribute* attr = NULL;
-      parse_attribute(sdp, value, &attr);
+      parse_attribute(reader, value, &attr);
 
       if(attr) {
 
         /* append the attribute to a media attribute list or to the general session attributes */
-        krx_sdp_attribute* tail = *sdp->curr_attr;
+        krx_sdp_attribute* tail = *reader->curr_attr;
         if(!tail) {
-          *sdp->curr_attr = attr;
+          *reader->curr_attr = attr;
         }
         else {
           while(tail) {
@@ -571,16 +740,16 @@ static void parse_line(krx_sdp* sdp, char* line) {
     }
     case 'm': {
       krx_sdp_media* media = NULL;
-      parse_media(sdp, value, &media);
+      parse_media(reader, value, &media);
 
       if(media) {
         /* make sure that any new found attributes are added to the attributes of the media element. */
-        sdp->curr_attr = &media->attributes;
+        reader->curr_attr = &media->attributes;
 
         /* append the media to the end. */
-        krx_sdp_media* tail = sdp->media;
+        krx_sdp_media* tail = reader->session->media;
         if(!tail) {
-          sdp->media = media;
+          reader->session->media = media;
         }
         else {
           while(tail) {
@@ -602,13 +771,13 @@ static void parse_line(krx_sdp* sdp, char* line) {
     
 }
 
-static void parse_version(krx_sdp* sdp, char* line) {
-  sdp->version = line;
+static void parse_version(krx_sdp_reader* reader, char* line) {
+  reader->session->version = line;
 }
 
 /* url: http://tools.ietf.org/html/rfc4566#section-5.2 */
 /* example: o=Mozilla-SIPUA-29.0 16705 0 IN IP4 0.0.0.0 */
-static void parse_origin(krx_sdp* sdp, char* line, krx_sdp_origin** origin) {
+static void parse_origin(krx_sdp_reader* reader, char* line, krx_sdp_origin** origin) {
 
   krx_sdp_origin* o = krx_sdp_origin_alloc();
   if(!o) {
@@ -619,26 +788,26 @@ static void parse_origin(krx_sdp* sdp, char* line, krx_sdp_origin** origin) {
   /* username */
   o->username = read_token(&line, SPACE);
   if(!o->username) {
-    PARSE_ERROR(sdp, "Invalid username.");
+    PARSE_ERROR(reader, "Invalid username.");
     return;
   }
 
   /* session id */
   if(read_u64(&line, &o->sess_id, 0) < 0) {
-    PARSE_ERROR(sdp, "Invalid session id.");
+    PARSE_ERROR(reader, "Invalid session id.");
     return;
   }
 
   /* session version */
   if(read_u64(&line, &o->sess_version, 0) < 0) {
-    PARSE_ERROR(sdp, "Invalid session version.");
+    PARSE_ERROR(reader, "Invalid session version.");
     return;
   }
 
-  parse_connection(sdp, line, &o->address);
+  parse_connection(reader, line, &o->address);
 }
 
-static void parse_attribute(krx_sdp* sdp, char* line, krx_sdp_attribute** attr) {
+static void parse_attribute(krx_sdp_reader* reader, char* line, krx_sdp_attribute** attr) {
   char* name;
   krx_sdp_attribute* a;
   *attr = NULL;
@@ -646,18 +815,18 @@ static void parse_attribute(krx_sdp* sdp, char* line, krx_sdp_attribute** attr) 
   /* parse name part. */
   name = read_token(&line, ":");
   if(!name) {
-    PARSE_ERROR(sdp, "Invalid attribute name");
+    PARSE_ERROR(reader, "Invalid attribute name");
     return ;
   }
 
   /* parse known attributes and append them to the appropriate lists */
   if(krx_stricmp(name, "candidate") == 0) {
     krx_sdp_candidate* cand = NULL;
-    parse_candidate(sdp, line, &cand); 
+    parse_candidate(reader, line, &cand); 
 
     if(cand) {
       /* append the candidate to the last media */
-      krx_sdp_media* media = sdp->media;
+      krx_sdp_media* media = reader->session->media;
       while(media) {
         if(!media->next) {
           break;
@@ -703,7 +872,7 @@ static void parse_attribute(krx_sdp* sdp, char* line, krx_sdp_attribute** attr) 
     /* alloc new attrib */
     a = krx_sdp_attribute_alloc();
     if(!a) {
-      PARSE_ERROR(sdp, "Cannot allocate new attribute.");
+      PARSE_ERROR(reader, "Cannot allocate new attribute.");
       return;
     }
 
@@ -715,7 +884,7 @@ static void parse_attribute(krx_sdp* sdp, char* line, krx_sdp_attribute** attr) 
 
 /* url: http://tools.ietf.org/html/rfc5245#section-15.1 */
 /* example: a=candidate:1 1 UDP 1694236671 84.105.186.141 9708 typ srflx raddr 192.168.0.194 rport 5179 */
-static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) {
+static void parse_candidate(krx_sdp_reader* reader, char* line, krx_sdp_candidate** cand) {
   printf("Lets parse a candidate.\n");
   char* s;
   krx_sdp_candidate* c = krx_sdp_candidate_alloc();
@@ -726,7 +895,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
   /* foundation */
   c->foundation = read_token(&line, SPACE TAB);
   if(!c->foundation) {
-    PARSE_ERROR(sdp, "Cannot parse the foundation of a candidate.");
+    PARSE_ERROR(reader, "Cannot parse the foundation of a candidate.");
     free(c);
     c = NULL;
     return;
@@ -734,7 +903,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
 
   /* component */
   if(read_u32(&line, &c->component_id, 0) < 0) {
-    PARSE_ERROR(sdp, "Cannot parse the component ID of a candidate.");
+    PARSE_ERROR(reader, "Cannot parse the component ID of a candidate.");
     free(c);
     c = NULL;
     return;
@@ -743,7 +912,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
   /* transport */
   s = read_token(&line, SPACE TAB);
   if(!s) {
-    PARSE_ERROR(sdp, "Cannot parse the transport of a candidate.");
+    PARSE_ERROR(reader, "Cannot parse the transport of a candidate.");
     free(c);
     c = NULL;
     return;
@@ -753,7 +922,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
     c->transport = SDP_UDP;
   }
   else {
-    PARSE_ERROR(sdp, "Unhandled transport type in the candidate.");
+    PARSE_ERROR(reader, "Unhandled transport type in the candidate.");
     free(c);
     c = NULL;
     return;
@@ -761,7 +930,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
 
   /* priority */
   if(read_u64(&line, &c->priority, 0) < 0) {
-    PARSE_ERROR(sdp, "Invalid priority in candidate.");
+    PARSE_ERROR(reader, "Invalid priority in candidate.");
     free(c);
     c = NULL;
     return;
@@ -770,7 +939,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
   /* addr */
   c->addr = read_token(&line, SPACE TAB);
   if(!c->addr) {
-    PARSE_ERROR(sdp, "Invalid address in candidate.");
+    PARSE_ERROR(reader, "Invalid address in candidate.");
     free(c);
     c = NULL;
     return;
@@ -778,7 +947,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
 
   /* port */
   if(read_u32(&line, &c->port, 0) < 0) {
-    PARSE_ERROR(sdp, "Invalid address in candidate.");
+    PARSE_ERROR(reader, "Invalid address in candidate.");
     free(c);
     c = NULL;
     return;
@@ -786,7 +955,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
 
   s = read_token(&line, SPACE TAB);
   if(!s || krx_strnicmp(s, "typ", 3) != 0) {
-    PARSE_ERROR(sdp, "Invalid candidate not typ string found.");
+    PARSE_ERROR(reader, "Invalid candidate not typ string found.");
     free(c);
     c = NULL;    
     return;
@@ -794,7 +963,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
 
   s = read_token(&line, SPACE TAB);
   if(!s) {
-    PARSE_ERROR(sdp, "Invalid candidate type was not found.");
+    PARSE_ERROR(reader, "Invalid candidate type was not found.");
     free(c);
     c = NULL;    
     return;
@@ -814,7 +983,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
     c->type = SDP_RELAY;
   }
   else {
-    PARSE_ERROR(sdp, "Invalid host type in candidate.");
+    PARSE_ERROR(reader, "Invalid host type in candidate.");
     free(c);
     c = NULL;    
     return;
@@ -829,7 +998,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
   /* raddr */
   s = read_token(&line, SPACE TAB);
   if(!s || krx_stricmp(s, "raddr") != 0) {
-    PARSE_ERROR(sdp, "Invalid candidate, not raddr host type in candidate.");
+    PARSE_ERROR(reader, "Invalid candidate, not raddr host type in candidate.");
     free(c);
     c = NULL;    
     return;
@@ -838,7 +1007,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
   /* raddr value */
   c->raddr = read_token(&line, SPACE TAB);
   if(!c->raddr) {
-    PARSE_ERROR(sdp, "Invalid candidate, no raddr found.");
+    PARSE_ERROR(reader, "Invalid candidate, no raddr found.");
     free(c);
     c = NULL;    
     return;    
@@ -847,7 +1016,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
   /* `rport` */
   s = read_token(&line, SPACE TAB);
   if(!s || krx_stricmp(s, "rport") != 0) {
-    PARSE_ERROR(sdp, "Invalid candidate, no rport found.");
+    PARSE_ERROR(reader, "Invalid candidate, no rport found.");
     free(c);
     c = NULL;    
     return;    
@@ -855,7 +1024,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
 
   /* rport value */
   if(read_u32(&line, &c->rport, 0) < 0) {
-    PARSE_ERROR(sdp, "Invalid candidate, no rport found.");
+    PARSE_ERROR(reader, "Invalid candidate, no rport found.");
     free(c);
     c = NULL;    
     return;    
@@ -866,7 +1035,7 @@ static void parse_candidate(krx_sdp* sdp, char* line, krx_sdp_candidate** cand) 
 
 /* url: http://tools.ietf.org/html/rfc4566#section-5.7 */
 /* example: IN IP4 224.2.36.42/127/3 */
-static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con) {
+static void parse_connection(krx_sdp_reader* reader, char* line, krx_sdp_connection** con) {
 
   /* allocate a new connection */
   krx_sdp_connection* c = krx_sdp_connection_alloc();
@@ -891,7 +1060,7 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
       c->addr_type = SDP_IP6;
     }
     else {
-      PARSE_ERROR(sdp, "Invalid address type.");
+      PARSE_ERROR(reader, "Invalid address type.");
       free(c);
       *con = NULL;
       return;
@@ -900,7 +1069,7 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
     /* address */
     c->address = read_token(&line, SPACE TAB);
     if(!c->address) {
-      PARSE_ERROR(sdp, "Invalid address.");
+      PARSE_ERROR(reader, "Invalid address.");
       free(c);
       *con = NULL;
       return;
@@ -913,7 +1082,7 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
       uint32_t value;
       *s++ = 0;
       if(read_u32(&s, &value, 256) < 0|| (*s && *s != '/')) {
-        PARSE_ERROR(sdp, "Inavlid TTL.");
+        PARSE_ERROR(reader, "Inavlid TTL.");
         free(c);
         *con = NULL;
         return;
@@ -925,7 +1094,7 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
       value = 1;
       if(*s++ == '/') {
         if(read_u32(&s, &value, 0) || *s) {
-          PARSE_ERROR(sdp, "Invalid groups.");
+          PARSE_ERROR(reader, "Invalid groups.");
           free(c); 
           *con = NULL;
           return;
@@ -935,7 +1104,7 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
     }
   }
   else {
-    PARSE_ERROR(sdp, "Invalid net type.");
+    PARSE_ERROR(reader, "Invalid net type.");
     free(c);
     *con = NULL;
     return;
@@ -944,7 +1113,7 @@ static void parse_connection(krx_sdp* sdp, char* line, krx_sdp_connection** con)
 
 /* url: http://tools.ietf.org/html/rfc4566#section-5.14 */
 /* example: video 49170/2 RTP/AVP 31 */
-static void parse_media(krx_sdp* sdp, char* value, krx_sdp_media** media) {
+static void parse_media(krx_sdp_reader* reader, char* value, krx_sdp_media** media) {
 
   uint32_t num = 0;
   char* s;
@@ -957,7 +1126,7 @@ static void parse_media(krx_sdp* sdp, char* value, krx_sdp_media** media) {
   /* media type */
   s = read_token(&value, SPACE TAB);
   if(!s) {
-    PARSE_ERROR(sdp, "Invalid media.");
+    PARSE_ERROR(reader, "Invalid media.");
     free(m);
     m = NULL;
     return;
@@ -970,7 +1139,7 @@ static void parse_media(krx_sdp* sdp, char* value, krx_sdp_media** media) {
     m->type = SDP_AUDIO;
   }
   else {
-    PARSE_ERROR(sdp, "Unhandled media type.");
+    PARSE_ERROR(reader, "Unhandled media type.");
     free(m);
     m = NULL;
     return;
@@ -978,7 +1147,7 @@ static void parse_media(krx_sdp* sdp, char* value, krx_sdp_media** media) {
 
   /* port */
   if(read_u32(&value, &num, 0) < 0) {
-    PARSE_ERROR(sdp, "Invalid port in media");
+    PARSE_ERROR(reader, "Invalid port in media");
     free(m);
     m = NULL;
     return;
@@ -989,7 +1158,7 @@ static void parse_media(krx_sdp* sdp, char* value, krx_sdp_media** media) {
   if(*value == '/') {  
     *value++ = 0;
     if(read_u32(&value, &num, 0) < 0) {
-      PARSE_ERROR(sdp, "Invalid number of parts.");
+      PARSE_ERROR(reader, "Invalid number of parts.");
       free(m);
       m = NULL;
       return;
@@ -1000,7 +1169,7 @@ static void parse_media(krx_sdp* sdp, char* value, krx_sdp_media** media) {
   /* proto */
   s = read_token(&value, SPACE TAB);
   if(!s) {
-    PARSE_ERROR(sdp, "Invalid proto");
+    PARSE_ERROR(reader, "Invalid proto");
     free(m);
     m = NULL;
     return;
@@ -1009,7 +1178,7 @@ static void parse_media(krx_sdp* sdp, char* value, krx_sdp_media** media) {
     m->proto = SDP_UDP_RTP_SAVPF;
   }
   else {
-    PARSE_ERROR(sdp, "Unhandled proto.");
+    PARSE_ERROR(reader, "Unhandled proto.");
     free(m);
     m = NULL;
     return;

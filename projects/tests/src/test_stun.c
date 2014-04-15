@@ -41,7 +41,7 @@ int main() {
 
 #if 1
   /* generate a basic sdp */
-  krx_sdp* sdp = krx_sdp_alloc();
+  krx_sdp_reader* sdp = krx_sdp_reader_alloc();
   if(!sdp) { 
     printf("Error: invalid sdp.\n"); 
     exit(1);
@@ -53,10 +53,13 @@ int main() {
   }
 
   printf("\n--------\n%s\n-----------\n", sdp_buf);
-  printf("________ SDP pointer in stun: %p\n", sdp->sdp);
-  krx_sdp_parse(sdp, sdp_buf, strlen(sdp_buf) + 1);
-  printf("________ SDP pointer in stun: %p, SDP: %p\n", sdp->sdp, sdp);
-  krx_sdp_attribute* attr = sdp->attributes;
+
+  if(krx_sdp_read(sdp, sdp_buf, strlen(sdp_buf)+1) < 0) {
+    printf("Error: cannot read the sdp.\n");
+    exit(1);
+  }
+
+  krx_sdp_attribute* attr = sdp->session->attributes;
 
   printf("Parsed SDP\n");
   while(attr) {
@@ -64,7 +67,7 @@ int main() {
     attr = attr->next;
   }
 
-  krx_sdp_media* medias = sdp->media;
+  krx_sdp_media* medias = sdp->session->media;
   while(medias) {
     printf("Media: %d\n", medias->port);
 
@@ -86,14 +89,14 @@ int main() {
       cand = cand->next;
     }
 
-
     medias = medias->next;
   }
 
   char out[4096];
-  krx_sdp_print(sdp, out, sizeof(out));
+  krx_sdp_print(sdp->session, out, sizeof(out));
 
-  krx_sdp_dealloc(sdp);
+  krx_sdp_reader_dealloc(sdp);
+
   exit(0);
 #endif
 

@@ -79,6 +79,7 @@ int krx_strnicmp(const char* s1, const char* s2, size_t n) {
       return -1;
     }
   }
+  return -1;
 }
 
 int krx_read_file(const char* path, char* buf, int len) {
