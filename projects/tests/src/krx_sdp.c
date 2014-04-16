@@ -20,9 +20,9 @@ static void parse_line(krx_sdp_reader* reader, char* line);                     
 static void parse_version(krx_sdp_reader* reader, char* line);                                             /* parse the version line. */
 static void parse_origin(krx_sdp_reader* reader, char* line, krx_sdp_origin** origin);                     /* parse a origin string, we allocate a new krx_sdp_connection */
 static void parse_connection(krx_sdp_reader* reader, char* line, krx_sdp_connection** con);                /* parse a connection string, we allocate a new krx_sdp_connection */
+static void parse_media(krx_sdp_reader* reader, char* line, krx_sdp_media** media);                        /* parse a media string, we allocate a new krx_sdp_media  */
 static void parse_attribute(krx_sdp_reader* reader, char* line, krx_sdp_attribute** attr);                 /* parse an attribute string, we allocate a new krx_sdp_attribute */
 static void parse_candidate(krx_sdp_reader* reader, char* line, krx_sdp_candidate** cand);                 /* parse a candidate string, we allocate a new krx_sdp_candidate */
-static void parse_media(krx_sdp_reader* reader, char* line, krx_sdp_media** media);                        /* parse a media string, we allocate a new krx_sdp_media  */
 
 /* API */
 /* ------------------------------------------------------------------------ */
@@ -39,7 +39,7 @@ krx_sdp_reader* krx_sdp_reader_alloc() {
   r->session = NULL;
   r->has_error = 0;
   r->curr_attr = NULL;
-
+  r->curr_media = NULL;
   return r;
 }
 
@@ -74,6 +74,7 @@ krx_sdp* krx_sdp_alloc() {
   k->origin = NULL;
   k->attributes = NULL;
   k->version = NULL;
+  k->mode = SDP_MODE_NONE;
 
   return k;
 }
@@ -178,6 +179,8 @@ void krx_sdp_dealloc(krx_sdp* sdp) {
   krx_sdp_attribute_dealloc(sdp->attributes);
   krx_sdp_media_dealloc(sdp->media);
 
+  /* @todo(roxlu) reset members of krx_sdp in krx_sdp_dealloc(). */
+
   free(sdp);
   sdp = NULL;
 }
@@ -227,6 +230,7 @@ krx_sdp_media* krx_sdp_media_alloc() {
   m->num_ports = 0;
   m->proto = SDP_PROTO_NONE;
   m->type = SDP_MEDIA_TYPE_NONE;
+  m->mode = SDP_MODE_NONE;
   m->next = NULL;
   m->rtpmap = NULL;
   m->attributes = NULL;
@@ -322,6 +326,53 @@ krx_sdp_candidate* krx_sdp_candidate_alloc() {
 
 /* GENERATING */
 /* ------------------------------------------------------------------------ */
+
+krx_sdp_attribute* krx_sdp_find_attribute(krx_sdp* session, char* name, int any) {
+
+  if(!session) { return NULL; } 
+  if(!name) { return NULL; } 
+
+  krx_sdp_attribute* tail = session->attributes;
+
+  while(tail) {
+    if(krx_stricmp(tail->name, name) == 0) {
+      return tail;
+    }
+    tail = tail->next;
+  }
+
+  /* do we need to search in the media elements too? */
+  if(any == 1) {
+    krx_sdp_attribute* attr = NULL;
+    krx_sdp_media* m = session->media;
+    while(m) {
+      attr = krx_sdp_media_find_attribute(m, name);
+      if(attr) {
+        return attr;
+      }
+      m = m->next;
+    }
+  }
+  return NULL;
+}
+
+krx_sdp_attribute* krx_sdp_media_find_attribute(krx_sdp_media* media, char* name) {
+
+  if(!media) { return NULL; } 
+  if(!name) { return NULL; } 
+
+  krx_sdp_attribute* tail = media->attributes;
+  while(tail) {
+    if(krx_stricmp(tail->name, name) == 0) {
+      return tail;
+    }
+    tail = tail->next;
+  }
+
+  return NULL;
+}
+
+/* - THIS IS JUST A TEST - */
 int krx_sdp_add_media(krx_sdp* sdp, krx_sdp_media* m) {
   if(!sdp) { return -1; } 
   if(!m) { return -2; } 
@@ -584,6 +635,12 @@ int krx_sdp_media_to_string(krx_sdp_media* m, char* buf, int nbytes) {
   pos = strlen(buf);
   sprintf(buf + pos, "\r\n");
 
+  /* write the mode if set */
+  if(m->mode != SDP_MODE_NONE) {
+    pos = strlen(buf);
+    sprintf(buf + pos, "a=%s\r\n", krx_sdp_mode_to_string(m->mode));
+  }
+
   return 0;
 }
 
@@ -648,6 +705,17 @@ int krx_sdp_candidates_to_string(krx_sdp_candidate* c, char* buf, int nbytes) {
     cand = cand->next;
   }
   return 0;
+}
+
+char* krx_sdp_mode_to_string(krx_sdp_mode mode) {
+  switch(mode) {
+    case SDP_SENDONLY: { return "sendonly"; } 
+    case SDP_RECVONLY: { return "recvonly"; } 
+    case SDP_SENDRECV: { return "sendrecv"; } 
+    default: {
+      return "unknown-mode";
+    }
+  }
 }
 
 char* krx_sdp_candidate_type_to_string(krx_sdp_candidate_type type) {
@@ -745,6 +813,7 @@ static void parse_line(krx_sdp_reader* reader, char* line) {
       if(media) {
         /* make sure that any new found attributes are added to the attributes of the media element. */
         reader->curr_attr = &media->attributes;
+        reader->curr_media = media;
 
         /* append the media to the end. */
         krx_sdp_media* tail = reader->session->media;
@@ -866,6 +935,30 @@ static void parse_attribute(krx_sdp_reader* reader, char* line, krx_sdp_attribut
     }
     
     /* @todo(roxlu): append the new candidate to the last media */
+  }
+  else if(krx_stricmp(name, "sendrecv") == 0) {
+    if(reader->curr_media) {
+      reader->curr_media->mode = SDP_SENDRECV;
+    }
+    else {
+      reader->session->mode = SDP_SENDRECV;
+    }
+  }
+  else if(krx_stricmp(name, "sendonly") == 0) {
+    if(reader->curr_media) {
+      reader->curr_media->mode = SDP_SENDONLY;
+    }
+    else {
+      reader->session->mode = SDP_SENDONLY;
+    }
+  }
+  else if(krx_stricmp(name, "recvonly") == 0) {
+    if(reader->curr_media) {
+      reader->curr_media->mode = SDP_RECVONLY;
+    }
+    else {
+      reader->session->mode = SDP_RECVONLY;
+    }
   }
   else {
 

@@ -1,398 +1,323 @@
-#include "krx_ice_pjnath.h"
-#include <pjnath/ice_strans.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
+#include "krx_ice.h"
 
-/* --------------------------------------------------------------------------- */
+/* STATICS                                                                */
+/* ---------------------------------------------------------------------- */
+static int create_listening_socket(char* ip, int port, krx_ice_conn** conn);                                               /* creates a listening socket */
+static int resolve_stun_server(krx_ice* ice, char* host, char* port);                                                      /* resolves the stun server; when done we will init the stun client */
+static int on_must_send_stunc(krx_stunc* stunc, uint8_t* data, int nbytes);                                                /* is called by stunc when we need to send some data */
+static void on_stun_server_resolved(uv_getaddrinfo_t* resolver, int status, struct addrinfo* res);                         /* is called when we've resolved the stun server */
+static uv_buf_t on_alloc(uv_handle_t* handle, size_t nbytes);                                                              /* allocate a uv_buf_f for the given amount of data */
+static void on_stunc_read(uv_udp_t* handle, ssize_t nread, uv_buf_t buf, struct sockaddr* addr, unsigned flags);           /* gets called when we received some info from our remove stun server */
+static void on_stunc_send(uv_udp_send_t* req, int status);                                                                 /* gets called when we've send something to the stun server */ 
 
-static int krx_ice_worker_thread(void* user); 
-static pj_status_t krx_ice_handle_events(krx_ice* k, unsigned int maxms, unsigned int* pcount);
-static void krx_ice_on_rx_data(pj_ice_strans* icest, unsigned int compid, void* pkt, pj_size_t size, const pj_sockaddr_t* saddr, unsigned int saddrlen);
-static void krx_ice_on_complete(pj_ice_strans* icest, pj_ice_strans_op op, pj_status_t status);
-static int krx_ice_candidate_to_string(char* out, int nbytes, pj_ice_sess_cand* cand);
-                              
-/* --------------------------------------------------------------------------- */
-
-int krx_ice_init(krx_ice* k) {
-
-  pj_status_t r; 
-
-  if(!k) {
-    return -1;
+/* API                                                                    */
+/* ---------------------------------------------------------------------- */
+krx_ice* krx_ice_alloc() {
+  krx_ice* ice = (krx_ice*)malloc(sizeof(krx_ice));
+  if(!ice) {
+    return NULL;
   }
 
-  /* initialize pj */
-  r = pj_init();
-  CHECK_PJ_STATUS(r, "Error: cannot initialize pj.\n", -2);
-
-  r = pjlib_util_init();
-  CHECK_PJ_STATUS(r, "Error: cannot initialize pj-util.\n", -3);
-
-  r = pjnath_init();
-  CHECK_PJ_STATUS(r, "Error: cannot initialize pjnath.\n", -4);
-  
-  /* create memory pool */
-  pj_caching_pool_init(&k->caching_pool, NULL, 0);
-  
-  /* initialize the ice settings */
-  pj_ice_strans_cfg_default(&k->ice_cfg);
-
-  /* create the pool */
-  k->pool = pj_pool_create(&k->caching_pool.factory, "krx_ice_pjnath", 512, 512, NULL); /* 512 = initial size, 512 = incremental size */
-  if(!k->pool) {
-    printf("Error: cannot create pool.\n");
-    return -5;
+  ice->sdp = krx_sdp_writer_alloc();
+  if(!ice->sdp) {
+    goto error;
   }
 
-  k->ice_cfg.stun_cfg.pf = &k->caching_pool.factory;
+  ice->stunc = krx_stunc_alloc();
+  if(!ice->stunc) {
+    goto error;
+  }
+
+  ice->mem = krx_mem_alloc(65536, 10);
+  if(!ice->mem) {
+    goto error;
+  }
+
+  ice->mem->user = ice;
+  ice->stunc->cb_send = on_must_send_stunc; /* @todo: krx_ice_alloc(), lets rename cb_send and cb_user to send_callback and user. */
+  ice->stunc->cb_user = ice;
+  ice->connections = NULL;  
+
+  return ice;
+
+ error:
   
-  /* create heap for timers */
-  r = pj_timer_heap_create(k->pool, 100, &k->ice_cfg.stun_cfg.timer_heap);
-  CHECK_PJ_STATUS(r, "Error: cannot create timer heap.\n", -6);
+  if(ice && ice->sdp) {
+    free(ice->sdp);
+    ice->sdp = NULL;
+  }
+  if(ice && ice->stunc) {
+    free(ice->stunc);
+    ice->stunc = NULL;
+  }
+  if(ice && ice->mem) {
+    free(ice->mem);
+    ice->mem = NULL;
+  }
+  free(ice);
 
-  /* create ioqueue for network I/O */
-  r = pj_ioqueue_create(k->pool, 16, &k->ice_cfg.stun_cfg.ioqueue);
-  CHECK_PJ_STATUS(r, "Error: cannot create ioqueue.\n", -7);
-
-  /* create managing thread */
-  r = pj_thread_create(k->pool, "krx_ice_pjnath", &krx_ice_worker_thread, k, 0, 0, &k->thread);
-  CHECK_PJ_STATUS(r, "Error: cannot create managing thread.", -8);
-
-  k->ice_cfg.af = pj_AF_INET();
-
-  /* @todo(roxlu): we could add a nameserver */
-
-  k->ice_cfg.opt.aggressive = PJ_FALSE; /* @todo(roxlu): read up the aggressive flag in ice_cfg. */
-  
-  /* default configs */
-  k->max_hosts = 4;
-  k->ncomp = 4;
- 
-  /* initialize the callbacks */
-  pj_bzero(&k->ice_cb, sizeof(k->ice_cb));
-  k->ice_cb.on_rx_data = krx_ice_on_rx_data;
-  k->ice_cb.on_ice_complete = krx_ice_on_complete;
-
-  /* sdp info */
-  k->ice_ufrag = NULL;
-  k->ice_pwd = NULL;
-
-  return 0;
+  return NULL;
 }
 
-int krx_ice_start(krx_ice* k) {
-
-  pj_status_t r;
-
-  if(!k) { return -1;  }
-
-  /* use specific stun server? */
-  if(k->stun_server_addr.slen) {
-    k->ice_cfg.stun.server = k->stun_server_addr;
+krx_ice_conn* krx_ice_conn_alloc() {
+  krx_ice_conn* conn = (krx_ice_conn*)malloc(sizeof(krx_ice_conn));
+  if(!conn) {
+    return NULL;
   }
-
-  if(k->stun_server_port == 0) {
-    k->ice_cfg.stun.port = PJ_STUN_PORT;  
-  }
-  else {
-    k->ice_cfg.stun.port = k->stun_server_port;
-  }
-
-  /* @todo(roxlu):  add turn features for ice */
-
-  /* create the instance */
-  r = pj_ice_strans_create("krx_ice_pjnath", 
-                           &k->ice_cfg,
-                           k->ncomp,
-                           k,                /* user data */
-                           &k->ice_cb,       /* ice callbacks */
-                           &k->ice_st);      /* instance ptr */
-
-  CHECK_PJ_STATUS(r, "Error: cannot create the strans object.\n", -2);
-
-  return 0;
+  conn->next = NULL;
+  return conn;
 }
 
-int krx_ice_start_session(krx_ice* k) {
+/*
+  krx_ice_start:
+       we will connect to a stun server and retrieve possible
+       candidates that can be used to  for connectivity checks.
+       all experimental.... getting to know the ice protocol. 
+*/
+int krx_ice_start(krx_ice* ice) {
 
-  pj_status_t r;
+  int r = 0;
 
-  if(!k) { return - 1; } 
-  if(!k->ice_st) { return -2; } 
+  if(!ice) { return -1; } 
 
-  if(pj_ice_strans_has_sess(k->ice_st)) {
-    printf("Error: ice already has a session.\n");
-    return -3;
-  }
-
-  
-  r = pj_ice_strans_init_ice(k->ice_st, PJ_ICE_SESS_ROLE_CONTROLLED, NULL, NULL);
-  if(r != PJ_SUCCESS) {
-    printf("Error: cannot initialize an ice session.\n");
-    return -4;
-  }
-
-  /* this is where we can create an sdp */
-  char sdp_buf[8096] = { 0 } ;
-  sprintf(sdp_buf,
-          "v=0\n" 
-          "o=- 123456789 34234324 IN IP4 localhost\n"    /* - [identifier] [session version] IN IP4 localhost */
-          "s=krx_ice\n"                                  /* software */
-          "t=0 0\n"                                      /* start, ending time */
-          "a=ice-ufrag:%s\n"
-          "a=ice-pwd:%s\n"
-          ,
-          k->ice_ufrag,
-          k->ice_pwd
-  );
-
-  /* write each component */
-  for(int i = 0; i < k->ncomp; ++i) {
-
-    pj_ice_sess_cand cand[PJ_ICE_ST_MAX_CAND] = { 0 } ;
-    char ipaddr[PJ_INET6_ADDRSTRLEN] = { 0 } ;
-
-    /* get default candidate for component, note that compoments start numbering from 1, not zero. */
-    r = pj_ice_strans_get_def_cand(k->ice_st, 1, &cand[0]);
-    if(r != PJ_SUCCESS) {
-      printf("Error: cannot retrieve default candidate for component: %d\n", i+1);
-      continue;
-    }
-
-    if(i == 0) {
-      int offset = strlen(sdp_buf);
-      sprintf(sdp_buf + offset, 
-              "m=video %d RTP/SAVPF 120\n"
-              "c=IN IP4 %s\n"
-              ,
-              (int)pj_sockaddr_get_port(&cand[0].addr),
-              pj_sockaddr_print(&cand[0].addr, ipaddr, sizeof(ipaddr), 0)              
-      );
-
-      /* print all candidates */
-      unsigned num_cands = PJ_ARRAY_SIZE(cand);
-      printf("Found number of candidates: %d\n", num_cands);      
-
-      // (ice_st && ice_st->ice && comp_id && comp_id <= ice_st->comp_cnt && count && cand),
-      printf("ice: %p\n", k->ice_st);
-      r = pj_ice_strans_enum_cands(k->ice_st, i + 1, &num_cands, cand);
-      if(r != PJ_SUCCESS) {
-        printf("Error: cannot retrieve candidates.\n");
-        exit(1);
-      }
-
-
-#if 1
-
-      for(int j = 0; j < num_cands; ++j) {
-        int offset = strlen(sdp_buf);
-        char* start_addr = sdp_buf + offset;
-        krx_ice_candidate_to_string(sdp_buf, sizeof(sdp_buf)-offset, &cand[j]);
-        char* end_addr = sdp_buf + strlen(sdp_buf);
-        printf("--------\n%s\n--------------\n", sdp_buf);
-      }
-
-      offset = strlen(sdp_buf);
-      char* start_addr = sdp_buf + offset;
-      krx_ice_candidate_to_string(sdp_buf + offset, sizeof(sdp_buf)-offset, &cand[1]);
-      char* end_addr = sdp_buf + strlen(sdp_buf);
-#endif
-    }
-
-
-  }
-
-
-  printf("SDP: %s\n", sdp_buf);
-          
-
-  r = pj_ice_strans_init_ice(k->ice_st, PJ_ICE_SESS_ROLE_CONTROLLED, NULL, NULL);
-  CHECK_PJ_STATUS(r, "Error: cannot init ice session.\n", -4);
-
-  return 0;
-}
-
-int krx_ice_set_stun_server(krx_ice* k, char* addr, unsigned int port) {
-
-  if(!k) { return -1;  }
-
-  if(!addr) {
-    printf("Error: invalid stun server ip.\n");
+  /* resolve the stun server that we use to gather canidates */
+  if(resolve_stun_server(ice, "stun.l.google.com", "19302") < 0) {
     return -2;
-  }
-
-  k->stun_server_addr = pj_str(addr);
-  k->stun_server_port = port;
-  
-  return 0;
-}
-
-int krx_ice_set_credentials(krx_ice* k, const char* username, const char* password) {
-
-  if(!k) {
-    return -1;
-  }
-
-  if(!username) {
-    return -2;
-  }
-
-  if(!password) {
-    return -3;
-  }
-
-  k->ice_ufrag = (char*)malloc(strlen(username) + 1);
-  k->ice_pwd = (char*)malloc(strlen(password) + 1);
-
-  memcpy(k->ice_ufrag, username, strlen(username));
-  memcpy(k->ice_pwd, password, strlen(password));
-
-  k->ice_ufrag[strlen(username)+1] = '\0';           /* @todo(roxlu) is this a correct way to copy the username to ice? */
-  k->ice_pwd[strlen(password)+1] = '\0';             /* @todo(roxlu) is this correct way to copy the username to ice?? */
+  };
 
   return 0;
 }
 
-int krx_ice_shutdown(krx_ice* k) {
+void krx_ice_update(krx_ice* ice) {
 
-  if(!k) { return -1; }
-
-  if(k->ice_ufrag) {
-    free(k->ice_ufrag);
-    k->ice_ufrag = NULL;
-  }
-
-  if(k->ice_pwd) {
-    free(k->ice_pwd);
-    k->ice_pwd = NULL;
-  }
-
-  return 0;
-}
-
-/* --------------------------------------------------------------------------- */
-
-static int krx_ice_worker_thread(void* user) {
-  krx_ice* k = (krx_ice*)user;
-
-  /* todo(roxlu) - handle stop of thread */
-  while(1) {
-    krx_ice_handle_events(k, 500, NULL);
-  }
-  
-  return 0;
-}
-
-static pj_status_t krx_ice_handle_events(krx_ice* k, unsigned int maxms, unsigned int* pcount) {
-
-  if(!k) {
-    printf("Error: krx_ice_handle_events(), invalid krx_ice pointer.\n");
-    return PJ_FALSE;
-  }
-
-  printf("lets poll: %p.\n", k);
-  
-  pj_time_val max_timeout = { 0, 0 };
-  pj_time_val timeout = { 0, 0 };
-  unsigned int count = 0;
-  unsigned int net_event_count = 0;
-  int c;
-
-  max_timeout.msec = maxms;
-  timeout.sec = timeout.msec = 0;
-
-  /* poll the timer to run it and also retrieve earliest entry */
-  c = pj_timer_heap_poll(k->ice_cfg.stun_cfg.timer_heap, &timeout);
-  if(c > 0) {
-    count += c;
-  }
-  
-  /* timer_heap_poll should never return negative values! */
-  if(timeout.sec < 0 || timeout.msec < 0) {
-    printf("Error: timer returns negative values. Should never happen.\n");
+  if(!ice) { 
+    printf("Error: cannot update. invalid param.\n");
     exit(1);
   }
+
+  uv_run(uv_default_loop(), UV_RUN_ONCE);
+}
+
+/* STATICS                                                                */
+/* ---------------------------------------------------------------------- */
+
+static int create_listening_socket(char* ip, int port, krx_ice_conn** conn) {
+  struct sockaddr_in addr;
+  krx_ice_conn* c = NULL;
+  int r = -1;
+
+  if(!ip) { return -1; } 
+
+  /* alloc connection + init socket */
+  c = krx_ice_conn_alloc();
+
+  if(!c) { return -3; }
+
+  r = uv_udp_init(uv_default_loop(), &c->sock);
+  if(r < 0) {
+    free(c);
+    return r;
+  }
+
+  /* bind socket */
+  addr = uv_ip4_addr(ip, port);
+  r = uv_udp_bind(&c->sock, addr, 0);
+  if(r < 0) {
+    free(c);
+    return r;
+  }
+
+  *conn = c;
+
+  return 0;
+}
+
+/*
+  on_must_send_stunc:
+      whenever the stun-client needs to send some data back, this function
+      is called. krx_ice uses a stun client to retrieve the public IP:PORT
+      that can be used for connectivity checks.
+ */
+
+
+static int on_must_send_stunc(krx_stunc* stunc, uint8_t* data, int nbytes) {
+
+  krx_ice* ice = (krx_ice*)stunc->cb_user;
+  if(!ice) {
+    printf("Error: the stunc->cb_user is not set.\n");
+    return -1;
+  }
+
+  uv_udp_send_t* req = (uv_udp_send_t*)malloc(sizeof(uv_udp_send_t));
+  if(!req) {
+    printf("Error: cannot allocate a send request.\n");
+    return -2;
+  }
+
+  uv_buf_t* buf = (uv_buf_t*)malloc(sizeof(uv_buf_t));
+  if(!buf) {
+    return -3;
+  }
+
+  /* get a free memory block that we use to send data */
+  krx_mem_block* block = krx_mem_get_free(ice->mem);
+  if(!block) {
+    printf("Error: no free memory block.\n");
+    exit(1);
+  }
+  if(block->size < nbytes) {
+    printf("Error: memory block is too tiny.\n");
+    exit(1);
+  }
+  memcpy(block->buf, data, nbytes);
+
+  buf->base = (char*)block->buf;
+  buf->len = nbytes;
+  req->data = block;
+
+  printf("Sending some data.\n");
+  int r = uv_udp_send(req, &ice->server, buf, 1, ice->raddr, on_stunc_send);
+  if(r < 0) {
+    printf("Error: cannot send.\n");
+  }
+
+  return 0;
+}
+
+
+static void on_stunc_read(uv_udp_t* handle, ssize_t nread, uv_buf_t buf, struct sockaddr* addr, unsigned flags) {
+  printf("Read something.\n");
+
+  krx_ice* ice = (krx_ice*)handle->data;
+  if(!ice) {
+    printf("Error: user data not set in on_stunc_read.\n");
+    exit(1);
+  }
+
+  krx_stunc_handle_traffic(ice->stunc, (uint8_t*)buf.base, nread);
+
+  /* free the used block again */
+  krx_mem_block* block = krx_mem_find_block(ice->mem, (uint8_t*)buf.base);
+  if(!block) {
+    printf("Error: cannot find memory block ... -this should/can't happen-\n");
+    exit(1);
+  }
+
+  krx_mem_set_free(ice->mem, block);
+}
+
+void on_stunc_send(uv_udp_send_t* req, int status) {
+  printf("Send some data: %d\n", status);
+
+  if(status < 0) {
+    printf("Error: cannot send.\n");
+    exit(1);
+  }
+
+  /* Free memory block again. */
+  krx_mem_block* block = (krx_mem_block*)req->data;
+  krx_ice* ice = (krx_ice*)block->mem->user;
+  krx_mem_set_free(ice->mem, block);
+}
+
+static int resolve_stun_server(krx_ice* ice, char* host, char* port) {
+
+  if(!ice) { return -1; } 
+  if(!host) { return -2; } 
+  if(!port) { return -3; } 
+
+  int r;
+  uv_getaddrinfo_t* resolver = (uv_getaddrinfo_t*) malloc(sizeof(uv_getaddrinfo_t));
+  struct addrinfo hints;
+
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_DGRAM;
+  hints.ai_protocol = IPPROTO_UDP;
+  hints.ai_flags = 0;
   
-  if(timeout.msec >= 1000) {
-    timeout.msec = 999;
+  resolver->data = ice;
+
+  r = uv_getaddrinfo(uv_default_loop(), resolver, on_stun_server_resolved, host, port, &hints);
+  if(r < 0) {
+    return -1;
   }
 
-  /* use the minimum timeout value */
-  if(PJ_TIME_VAL_GT(timeout, max_timeout)) {
-    timeout = max_timeout;
-  }
-
-
-  /* poll ioqueue */
-  do { 
-
-    c = pj_ioqueue_poll(k->ice_cfg.stun_cfg.ioqueue, &timeout);
-    if(c < 0) {
-      pj_status_t err = pj_get_netos_error();
-      pj_thread_sleep(PJ_TIME_VAL_MSEC(timeout));
-      if(pcount) {
-        *pcount = count;
-        return err;
-      }
-      else if(c == 0) {
-        break;
-      }
-      else {
-        net_event_count += c;
-        timeout.sec = timeout.msec = 0;
-      }
-    }
-
-    
-  } while(c > 0 && net_event_count < 1 );
-
-  count += net_event_count;
-  if(pcount) {
-    *pcount = count;
-  }
-
-  return PJ_SUCCESS;
+  return 0;
 }
 
-static void krx_ice_on_rx_data(pj_ice_strans* icest, 
-                               unsigned int compid, void* pkt, pj_size_t size, 
-                               const pj_sockaddr_t* saddr, unsigned int saddrlen)
-{
-  printf("Received a packet.\n");
-}
+static void on_stun_server_resolved(uv_getaddrinfo_t* resolver, int status, struct addrinfo* res) {
 
-static void krx_ice_on_complete(pj_ice_strans* icest, 
-                                    pj_ice_strans_op op, 
-                                    pj_status_t status) 
-{
-  printf("----------------- ice complete -------------------------- \n");
-  krx_ice* k = (krx_ice*)pj_ice_strans_get_user_data(icest);
-  if(!k) {
-    printf("Error: complete but no krx_ice* user data found.\n");
-    return;
+  int r;
+  krx_ice* ice = (krx_ice*) resolver->data;
+
+  if(status < 0) {
+    printf("Error: something went wrong while resolving the stun server.\n");
+    exit(1);
   }
 
-  krx_ice_start_session(k);
+  /* get IP */
+  char ip[17] = { 0 } ;
+  uv_ip4_name((struct sockaddr_in*)res->ai_addr, ip, 16);
+  ip[16] = '\0';
+  printf("Stun ip: %s\n", ip);
+
+  /* init UDP sock */
+  r = uv_udp_init(uv_default_loop(), &ice->server);
+  if(r < 0) {
+    printf("Error: cannot initialize the socket.\n");
+    exit(1);
+  }
+
+  /* bind socket */
+  struct sockaddr_in addr = uv_ip4_addr("0.0.0.0", 19302);                          /* @todo on_stun_server_resolved(), get port from somewhere */
+  r = uv_udp_bind(&ice->server, (struct sockaddr_in)addr, 0);
+  if(r < 0) {
+    printf("Error: cannot bind:%s \n", uv_strerror(r));
+    exit(1);
+  }
+
+  ice->raddr = uv_ip4_addr(ip, 19302);
+  ice->server.data = ice;
+
+  r = uv_udp_recv_start(&ice->server, on_alloc, on_stunc_read);
+  if(r < 0) {
+    printf("Error: cannot start receiving on our stun client port.\n");
+    exit(1);
+  }
+
+  r = krx_stunc_start(ice->stunc);
+  if(r < 0) {
+    printf("Erorr: cannot kickoff the stun client.\n");
+    exit(1);
+  }
+
+  free(resolver);
 }
 
-static int krx_ice_candidate_to_string(char* out, int nbytes, pj_ice_sess_cand* cand) {
+static uv_buf_t on_alloc(uv_handle_t* handle, size_t nbytes) {
 
-  if(!out) { return -1; }
-  if(!nbytes) { return 2; } 
-  if(!cand) { return -3; } 
+  krx_ice* ice = (krx_ice*)handle->data;
+  if(!ice) {
+    printf("Error: handle's reference isn't an ice one...\n");
+    exit(1);
+  }
 
-  char ipaddr[PJ_INET6_ADDRSTRLEN];
-  #if 0
-  /* @todo(roxlu): make sure we don't overflow the out buffer in krx_ice_candidate_to_string() */
-  sprintf(out,
-          "a=candidate:%.*s %u UDP %u %s %u type %s\n",
-          (int)cand->foundation.slen, cand->foundation.ptr,            /* foundation */
-          (unsigned)cand->comp_id,                                     /* component id */
-          cand->prio,                                                  /* priority */
-        "address",
-        //        pj_sockaddr_print(&cand->addr, ipaddr, sizeof(ipaddr), 0),   /* socket address */
-        // (unsigned)pj_sockaddr_get_port(&cand->addr),
-          pj_ice_get_cand_type_name(cand->type)
-  );
-  #endif
-          
-  return nbytes;
+  krx_mem_block* block = krx_mem_get_free(ice->mem);
+  if(!block) {
+    printf("Error: there are no free memory blocks anymore :( \n");
+    exit(1);
+  }
+
+  if(block->size < nbytes) {
+    printf("Error: the memory block we got is smaller then that we need....\n");
+    exit(1);
+  }
+
+  uv_buf_t buf;
+  buf.base = (char*)block->buf;
+  buf.len = nbytes;
+  return buf;
 }

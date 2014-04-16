@@ -5,6 +5,7 @@
 
 int parse_attribute(uint8_t** buf, krx_stunc_attr* attr);
 int parse_attr_mapped_address(uint8_t** buf, krx_stunc_attr* attr);
+int parse_attr_xor_mapped_address(uint8_t** buf, krx_stunc_attr* attr);
 
 /* API */
 /* --------------------------------------------------------------------------- */
@@ -146,6 +147,10 @@ int parse_attribute(uint8_t** buf, krx_stunc_attr* attr) {
       parse_attr_mapped_address(buf, attr);
       break;
     }
+    case STUN_XOR_MAPPED_ADDRESS: {
+      parse_attr_xor_mapped_address(buf, attr);
+      break;
+    }
     default: {
       printf("-- Attribute: UNKNOWN\n");
       return -1;
@@ -191,6 +196,61 @@ int parse_attr_mapped_address(uint8_t** buf, krx_stunc_attr* attr) {
   attr->address.sin_family = AF_INET;
   attr->address.sin_port = port;
   attr->address.sin_addr.s_addr = ip;
+
+  /* @todo - do something with the stun result  */
+
+  return 0;
+}
+
+/* see: http://tools.ietf.org/html/rfc5389#section-15.2 */
+int parse_attr_xor_mapped_address(uint8_t** buf, krx_stunc_attr* attr) {
+  printf("---- XOR-MAPPED_ADDRESS\n");
+
+  uint8_t family;
+  uint16_t port;
+  uint32_t ip;
+  unsigned char addr[16];
+  uint32_t cookie = 0x2112A442;
+  
+  krx_read_u8(buf); /* padded on 32bit */
+  family = krx_read_u8(buf);
+  port = krx_read_be_u16(buf);
+
+  if(family != 0x01) {
+    /* @todo(roxlu): add IP6 support in parse_attr_mapped_address(). */;
+    printf("Error: krx_stunc only handles IP4 for now.\n");
+    exit(0);
+  }
+
+  if(family == 0x01) {
+    ip = krx_read_be_u32(buf);
+  }
+  else {
+    /* @todo - ip6 */
+  }
+
+  uint8_t* ip_ptr = (uint8_t*)&ip;
+  uint8_t* port_ptr = (uint8_t*)&port;
+  uint8_t* key_ptr = (uint8_t*)&cookie;
+
+  /* xor */
+  for(int i = 0; i < 2; ++i) {
+    port_ptr[i] = port_ptr[i] ^ key_ptr[2 + i];
+  }
+
+  for(int i = 0; i < 4; ++i) {
+    ip_ptr[i] = ip_ptr[i] ^ key_ptr[i];
+  }
+
+  /* make writable */
+  for(int i = 0; i < 4; ++i) {
+    addr[i] = (ip >> (i * 8)) & 0xFF;
+  }
+
+  printf("----- Port: %d\n", port);
+  printf("----- IP: %d.%d.%d.%d\n", addr[0], addr[1], addr[2], addr[3]);
+
+  /* @todo - do something with the stun result ^.^ */
 
   return 0;
 }

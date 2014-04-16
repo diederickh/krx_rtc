@@ -1,55 +1,49 @@
 /*
-  krx_ice_pjnath
-  ---------------
+  
+  krx_ice
+  --------
 
-  Using PJNATH with the pjnath build in transport support.
+  Experimental code to implement the bare bones for an ICE implementation
+  so we can receive and send video/audio data to another webrtc endpoint.
+  This code is used to discover the ICE protocol(s).
 
-  References:
-  -----------
-  - create unique string: https://code.google.com/p/csipsimple/source/browse/trunk/pjsip_android/apps/pjsip/project/pjnath/src/pjnath-test/ice_test.c?spec=svn860&r=860
+  For ease of development we're not yet decoupling the networking layer at 
+  this point.. using libuv for that. 
+
+  References
+  ----------
+  - ice implementation: https://github.com/korobool/linphonecdbus/blob/309b03cb76734d54630a42300cf0a3e9b8710d49/mediastreamer2/src/voip/ice.c
  */
-#ifndef KRX_ICE_PJNATH
-#define KRX_ICE_PJNATH
 
-#include <pjlib.h>
-#include <pjlib-util.h>
-#include <pjnath.h>
+#ifndef KRX_ICE_H
+#define KRX_ICE_H
 
-#define CHECK_PJ_STATUS(status, msg, err) \
-  if(status != PJ_SUCCESS) {              \
-    printf("%s", msg);                    \
-    return err;                           \
-  } 
-
+#include "krx_stun.h"
+#include "krx_sdp.h"
+#include "krx_memory.h"
+#include <uv.h>
 
 typedef struct krx_ice krx_ice;
+typedef struct krx_ice_conn krx_ice_conn;
 
-struct krx_ice {
-
-  /* options */
-  int max_hosts;          /* how many candidate we are allowed to discover */
-  int ncomp;              /* comp count ... @todo(roxlu) figure out the meaning of this */
-  
-  /* pjnath specific */
-  pj_str_t stun_server_addr;
-  int stun_server_port;
-  pj_caching_pool caching_pool;
-  pj_pool_t* pool;
-  pj_ice_strans_cfg ice_cfg;
-  pj_ice_strans* ice_st;
-  pj_ice_strans_cb ice_cb;
-  pj_thread_t* thread;
-
-  /* sdp info */
-  char* ice_ufrag;
-  char* ice_pwd;
+struct krx_ice_conn {                               /* represents a connections/socket */
+  uv_udp_t sock;
+  krx_ice_conn* next;
 };
 
-int krx_ice_init(krx_ice* k);
-int krx_ice_start(krx_ice* k);
-int krx_ice_set_stun_server(krx_ice* k, char* addr, unsigned int port);
-int krx_ice_set_credentials(krx_ice* k, const char* username, const char* password);
-int krx_ice_start_session(krx_ice* k);
-int krx_ice_shutdown(krx_ice* k);
+struct krx_ice {                                    /* the ice context */
+  krx_ice_conn* connections;
+  krx_sdp_writer* sdp;
+  krx_stunc* stunc;
+  krx_mem* mem;                                     /* very simplistic memory management */
+  uv_udp_t server;
+  struct sockaddr_in raddr;
+};
+
+krx_ice* krx_ice_alloc();
+krx_ice_conn* krx_ice_conn_alloc();
+int krx_ice_start(krx_ice* ice); 
+void krx_ice_update(krx_ice* ice);
+
 
 #endif

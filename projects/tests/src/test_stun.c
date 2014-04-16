@@ -92,9 +92,15 @@ int main() {
     medias = medias->next;
   }
 
+  krx_sdp_attribute* ufrag = krx_sdp_find_attribute(sdp->session, "ice-ufrag", 1);
+  if(ufrag) {
+    printf("UFRAG: %s\n", ufrag->value);
+  }
+
   char out[4096];
   krx_sdp_print(sdp->session, out, sizeof(out));
 
+  printf("OUT: %s\n", out);
   krx_sdp_reader_dealloc(sdp);
 
   exit(0);

@@ -6,7 +6,8 @@ include(Triplet.cmake)
 
 set(bd ${CMAKE_CURRENT_LIST_DIR})
 
-set(use_test_stun TRUE)
+set(use_test_stun FALSE)
+set(use_test_ice TRUE)
 
 include_directories(
   ${extern_include_dir}
@@ -60,6 +61,26 @@ if(use_test_stun)
     )
   target_link_libraries(${test_stun} ${libraries})
   install(TARGETS ${test_stun} DESTINATION bin)
+endif()
+
+
+if(use_test_ice)
+
+  set(app "test_ice")
+  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(app "test_ice_debug")
+  endif()
+
+  add_executable(${app}
+    ${bd}/../src/test_krx_ice.c
+    ${bd}/../src/krx_stun.c
+    ${bd}/../src/krx_utils.c
+    ${bd}/../src/krx_memory.c
+    ${bd}/../src/krx_sdp.c
+    ${bd}/../src/krx_ice.c
+    )
+  target_link_libraries(${app} ${libraries})
+  install(TARGETS ${app} DESTINATION bin)
 endif()
 
 

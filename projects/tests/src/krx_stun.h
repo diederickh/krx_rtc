@@ -1,3 +1,17 @@
+/*
+  
+  krx_stunc
+  --------
+
+  Experimental stun client code; only implements the bare minimum which 
+  is needed to setup a webrtc connection between two peers 
+
+  References:
+  -----------
+  - info on XOR obfuscating which is used with a XOR-MAPPED-ADDRESS: http://blog.malwarebytes.org/intelligence/2013/05/nowhere-to-hide-three-methods-of-xor-obfuscation/
+  - javascript stun/turn implemenation: https://github.com/davidrivera/stutter.js
+
+ */
 #ifndef KRX_STUNC_H
 #define KRX_STUNC_H
 
@@ -17,6 +31,7 @@
 #define STUN_BIND_REQUEST 0x0001
 #define STUN_BIND_RESPONSE 0x0101
 #define STUN_MAPPED_ADDRESS 0x0001
+#define STUN_XOR_MAPPED_ADDRESS 0x0020
 
 typedef struct krx_stunc krx_stunc;
 typedef struct krx_stunc_msg krx_stunc_msg;
@@ -38,7 +53,6 @@ struct krx_stunc {
   /* callbacks */
   krx_stunc_send_cb cb_send;
   void* cb_user;
-
   
   /* incoming data */
   uint8_t buffer[4096];

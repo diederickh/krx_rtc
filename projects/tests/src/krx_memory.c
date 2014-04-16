@@ -12,6 +12,7 @@ krx_mem* krx_mem_alloc(uint32_t size, int num_blocks) {
     return NULL;
   }
   m->block = NULL;
+  m->user = NULL;
 
   for(int i = 0; i < num_blocks; ++i) {
     krx_mem_block* block = krx_mem_block_alloc(size);
@@ -19,6 +20,7 @@ krx_mem* krx_mem_alloc(uint32_t size, int num_blocks) {
       printf("Error cannot allocate memory block.\n");
       exit(1);
     }
+    block->mem = m;
     block->next = m->block;
     m->block = block;
   }  

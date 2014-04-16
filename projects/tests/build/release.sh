@@ -10,9 +10,10 @@ cmake --build . --target install
 
 if [ "$(uname)" == "Darwin" ] ; then 
     cd ./../../../../install/mac-clang-x86_64/bin/
-    ./test_stun
+    
+    #./test_stun
     #./test_pjsip_sdp
-    #./test_ice
+    ./test_ice
     #./ice_test
     #./stun_test
     #./signal_server

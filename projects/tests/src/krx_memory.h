@@ -26,10 +26,12 @@ struct krx_mem_block {
   uint32_t size;
   uint8_t is_free;
   krx_mem_block* next;
+  krx_mem* mem;                                                /* points back to the krx_mem to which this belongs */
 };
 
 struct krx_mem {
   krx_mem_block* block;
+  void* user;
 };
 
 krx_mem* krx_mem_alloc(uint32_t size, int numblocks);          /* allocate `numblocks` memory blocks with a size of `size` */
